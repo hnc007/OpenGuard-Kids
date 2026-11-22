@@ -1,0 +1,13 @@
+MÔ PHỎNG • Phiên của em dùng dữ liệu giả. Đồng hồ chạy nhanh để minh họa.
+Lúc bắt đầu em còn 180 giây.
+Em còn 1 phút. Em nhớ lưu bài nhé.
+Giây 120: bắt đầu phút cuối để em lưu bài.
+Giây 180: đến giờ nghỉ theo quy tắc của Phụ huynh mẫu. Em có thể xin thêm giờ.
+game.exe bị chặn. Ứng dụng nằm trong danh sách giới hạn của em. Người đặt luật: Phụ huynh mẫu. Em có thể gửi yêu cầu xem lại.
+north-school.example.org → NOERROR
+north-school.example.org. 30 IN A 192.0.2.1
+north-maze.example.org → NXDOMAIN
+north-maze.example.org bị chặn. Quy tắc của em đang giới hạn nhóm trang này. Người đặt luật: Phụ huynh mẫu. Em có thể gửi yêu cầu xem lại.
+www.google.com → NOERROR
+www.google.com. 60 IN CNAME forcesafesearch.google.com.
+forcesafesearch.google.com. 30 IN A 192.0.2.1

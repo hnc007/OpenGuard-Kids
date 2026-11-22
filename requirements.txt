@@ -1,0 +1,14 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30,<1
+SQLAlchemy>=2.0,<2.1
+alembic>=1.13,<2
+pydantic>=2.8,<3
+cryptography>=43
+httpx>=0.27,<0.29
+tldextract>=5.1,<6
+dnspython>=2.6,<3
+psutil>=6,<8
+tzdata>=2024.1
+pytest>=8,<10
+pywin32>=306; sys_platform == "win32"
+websockets>=15,<19

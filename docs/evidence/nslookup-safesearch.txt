@@ -1,0 +1,5 @@
+Server:  UnKnown
+Address:  127.0.0.1
+
+www.google.com	canonical name = forcesafesearch.google.com
+Non-authoritative answer:

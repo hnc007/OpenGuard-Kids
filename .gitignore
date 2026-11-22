@@ -221,3 +221,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Local development database, TLS credentials and disposable measurements
+.local/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.pem

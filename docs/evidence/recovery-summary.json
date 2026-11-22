@@ -1,0 +1,19 @@
+{
+  "samples_per_fault": 30,
+  "python": "3.11.9",
+  "windows": "10.0.26200",
+  "scope": "loopback TLS, idle synthetic agent, immediate retry after fault, no SCM or Windows settings",
+  "verification": "one committed event per sample and an empty agent outbox after acknowledgement",
+  "agent_process_restart": {
+    "p50_ms": 1597.852,
+    "p95_ms": 1697.183
+  },
+  "lost_event_receipt": {
+    "p50_ms": 61.923,
+    "p95_ms": 91.467
+  },
+  "server_restart": {
+    "p50_ms": 851.392,
+    "p95_ms": 1018.039
+  }
+}

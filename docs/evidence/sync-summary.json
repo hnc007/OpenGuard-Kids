@@ -1,0 +1,23 @@
+{
+  "scope": "Windows development loopback HTTPS/WSS, immediate heartbeat; same-host DPAPI/SQLite; command receipt and server ACK, no Windows action or normal 60-second wait",
+  "samples": 30,
+  "python": "3.11.9",
+  "windows": "10.0.26200",
+  "tls_checks": [
+    "HTTPS rejects wrong pin",
+    "WSS rejects wrong pin",
+    "HTTPS rejects untrusted CA"
+  ],
+  "policy_cache_ms": {
+    "p50": 83.225,
+    "p95": 112.817
+  },
+  "command_received_ms": {
+    "p50": 912.856,
+    "p95": 944.465
+  },
+  "command_ack_ms": {
+    "p50": 928.888,
+    "p95": 960.883
+  }
+}
