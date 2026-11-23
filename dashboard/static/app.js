@@ -17,14 +17,35 @@ const empty = text => `<p class="empty">${esc(text)}</p>`;
 const list = (items, noItems) => items.length ? `<ul class="list">${items.map(item=>`<li>${item}</li>`).join("")}</ul>` : empty(noItems);
 const button = (action,label,cls="secondary") => `<button type="button" data-act="${action}" class="${cls}">${esc(label)}</button>`;
 const setNotice = text => {notice.textContent = text;};
+const childPages = new Map([["time","requests"],["appeal","requests"],["report","overview"],["privacy","privacy"],
+                            ["requests","requests"],["policy","policy"],["devices","devices"],["audit","audit"]]);
+function childRoute(hash=location.hash) {
+  if (!hash || hash==="#requests") return null;
+  const match=/^#child-([a-z]+)\/([1-9]\d*)$/.exec(hash);
+  const id=match ? Number(match[2]) : null;
+  if (!match || !childPages.has(match[1]) || !Number.isSafeInteger(id)) return {id:null};
+  return {id,page:match[1],tab:childPages.get(match[1])};
+}
+function matchesChildRoute(user, route=childRoute()) {
+  return !route || (route.id!==null && user?.role==="child-view" && user.child_id===route.id);
+}
+function refuseChildRoute() {
+  state.child=null;state.children=[];state.policy=null;state.revision++;
+  setNotice("");session.replaceChildren();
+  app.innerHTML=`<main class="shell"><h1>Góc của em</h1><p>Cần liên kết từ máy đã ghép và tài khoản riêng đúng với hồ sơ trên máy đó. Em hãy mở lại liên kết từ khay hoặc đăng nhập đúng tài khoản.</p>${button("logout","Đăng xuất để đổi tài khoản")}</main>`;
+}
 async function api(path,method="GET",body) {
   const generation = sessionGeneration;
+  const hash = location.hash;
+  if (!path.startsWith("/api/auth/") && !matchesChildRoute(state.user))
+    throw new DOMException("Hồ sơ của thiết bị đã thay đổi.", "AbortError");
   const headers = {"Accept":"application/json"};
   if (method !== "GET") headers["X-CSRF-Token"] = state.csrf;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   const response = await fetch(path,{method,headers,credentials:"same-origin",cache:"no-store",body:body===undefined?undefined:JSON.stringify(body)});
   const result = response.status === 204 ? null : await response.json();
-  if (generation !== sessionGeneration) throw new DOMException("Phiên đã thay đổi.", "AbortError");
+  if (generation !== sessionGeneration || (hash!==location.hash && (childRoute(hash) || childRoute())))
+    throw new DOMException("Phiên đã thay đổi.", "AbortError");
   if (!response.ok) {
     if (response.status === 401 && state.user) loginScreen();
     throw new Error(typeof result.detail === "string" ? result.detail : "Thao tác chưa thành công.");
@@ -51,10 +72,12 @@ async function verifyVisibleSession() {
   maskFamily(true);
   try {
     const current=await api("/api/auth/me");
-    if (current.id!==state.user.id || current.csrf_token!==state.csrf) {
+    if (current.id!==state.user.id || current.csrf_token!==state.csrf || current.role!==state.user.role
+        || current.child_id!==state.user.child_id) {
       loginScreen();
       return;
     }
+    if (!matchesChildRoute(current)) refuseChildRoute();
     if (!document.hidden) maskFamily(false);
   } catch {
     if (generation===sessionGeneration) loginScreen();
@@ -67,7 +90,12 @@ document.addEventListener("visibilitychange",()=>{
 });
 window.addEventListener("pagehide",()=>{if(state.user) maskFamily(true);});
 window.addEventListener("pageshow",event=>{if(event.persisted) void verifyVisibleSession();});
-window.addEventListener("hashchange",()=>{
+window.addEventListener("hashchange",event=>{
+  if(childRoute() || childRoute(new URL(event.oldURL).hash)){
+    sessionGeneration++;state.revision++;maskFamily(true);
+    location.reload();
+    return;
+  }
   if(location.hash==="#requests" && state.user && state.user.role!=="admin" && state.tab!=="requests") {
     state.tab="requests";state.offset=0;setNotice("");void render();
   }
@@ -87,20 +115,28 @@ async function loadChildren(preferred) {
 async function openSession(user) {
   sessionGeneration++;
   state.user=user;state.csrf=user.csrf_token;
-  state.tab=location.hash==="#requests"?"requests":"overview";
+  const route=childRoute();
+  state.tab=route?.tab || (location.hash==="#requests"?"requests":"overview");
+  if (!matchesChildRoute(user,route)) {refuseChildRoute();return;}
   session.innerHTML=`<span class="account-label">${esc(user.username)}</span> ${button("logout","Đăng xuất")}`;
   if (user.role==="admin") {
     const data=await api("/api/admin/status");
     app.innerHTML=`<main class="shell"><h1>Quản trị hệ thống</h1><p>${esc(data.accounts)} tài khoản · ${esc(data.children)} hồ sơ trẻ.</p></main>`;
     return;
   }
-  await loadChildren(); await render();
+  if (route) {
+    // A tray link has one authorized target. Never fall back to the first family profile.
+    state.children=[];state.child=route.id;
+  } else await loadChildren();
+  await render();
 }
 function frame() {
   const selector=state.children.length?`<label>Hồ sơ<select id="child">${state.children.map(c=>`<option value="${c.id}" ${c.id===state.child?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label>`:"";
   app.innerHTML=`<main class="shell"><header class="heading"><div><h1>${parent()?"Không gian gia đình":"Góc của em"}</h1><p>${parent()?"Quản lý thời gian và quy tắc sử dụng máy tính.":"Em có thể xem quy tắc và nhắn ý kiến cho bố mẹ."}</p></div>${selector}</header><nav class="tabs" aria-label="Các trang">${Object.entries(tabs()).map(([id,title])=>`<button data-tab="${id}" ${id===state.tab?'aria-current="page"':""}>${esc(title)}</button>`).join("")}</nav><div id="view" class="stack" aria-live="polite"><p>Đang tải…</p></div></main>`;
 }
 async function render() {
+  const route=childRoute();
+  if (!matchesChildRoute(state.user,route) || (route && state.child!==route.id)) {refuseChildRoute();return;}
   const revision=++state.revision;
   frame();
   const view=document.querySelector("#view");
@@ -110,7 +146,11 @@ async function render() {
     else if (state.tab==="privacy") html=await privacyPage();
     else if (!state.child) html=card("Hồ sơ gia đình",empty("Chưa có hồ sơ trẻ.")+(parent()?button("account","Tạo hồ sơ"):""));
     else html=await ({overview:overviewPage,policy:policyPage,devices:devicesPage,requests:requestsPage,audit:auditPage}[state.tab])();
-    if(revision===state.revision) view.innerHTML=html;
+    if(revision===state.revision) {
+      view.innerHTML=html;
+      if(state.tab==="requests" && route?.page==="appeal") view.querySelector("#ask-domain input")?.focus();
+      if(state.tab==="requests" && route?.page==="time") view.querySelector("#ask-time button")?.focus();
+    }
   } catch(error) {
     if(revision===state.revision) view.innerHTML=card("Chưa tải được dữ liệu",`<p>${esc(error.message)}</p>${button("retry","Thử lại")}`);
   }
@@ -155,7 +195,7 @@ async function devicesPage(){
 }
 function commandRows(commands){
   const actions={lock:"Khóa",unlock:"Mở khóa",add_15:"Thêm 15 phút"};
-  const statuses={queued:"Đang chờ máy",expired:"Hết hạn giao lệnh",acknowledged:"Máy đã xác nhận"};
+  const statuses={queued:"Đang chờ máy",expired:"Hết hạn chờ xác nhận từ máy",acknowledged:"Máy đã xác nhận"};
   return list(commands.map(c=>`${esc(c.device)} · ${actions[c.action]} · ${statuses[c.status]} <small>${date(c.created_at)}</small>`),"Chưa gửi lệnh nào.");
 }
 async function refreshCommandHistory(){
@@ -181,6 +221,8 @@ async function requestsPage(){
 async function auditPage(){
   const rows=await api(childURL(`/audit?offset=${state.offset}`));
   const titles={"policy.update":"Đổi quy tắc","child.created":"Tạo hồ sơ","device.enroll":"Ghép thiết bị","device.revoke":"Thu hồi thiết bị","command.queued":"Gửi lệnh tới thiết bị","request.decision":"Trả lời yêu cầu","pairing.consent":"Xác nhận phạm vi ghép máy","child.account.created":"Tạo tài khoản của trẻ"};
+  titles["lab.removal_authorized"]="Phụ huynh cho phép gỡ service";
+  titles["lab.removal_reported"]="Quản trị viên báo đã gỡ service";
   return card("Lịch sử thay đổi",list(rows.map(r=>`<details><summary><strong>${esc(titles[r.action]||r.action)}</strong> · ${esc(r.actor)} · ${date(r.ts)}</summary>${r.action==="policy.update"?policyDiff(r.before,r.after):""}<h3>Trước khi đổi</h3><pre>${esc(JSON.stringify(r.before,null,2))}</pre><h3>Sau khi đổi</h3><pre>${esc(JSON.stringify(r.after,null,2))}</pre>${r.ip?`<small>Địa chỉ quản trị ${esc(r.ip)}</small>`:""}</details>`),"Chưa có thay đổi.")+pager(rows.length));
 }
 function policyDiff(before,after) {
@@ -216,8 +258,12 @@ document.addEventListener("change",async e=>{
 document.addEventListener("click",async e=>{
   const b=e.target.closest("button");if(!b)return;
   if(b.dataset.tab){
+    const route=childRoute();
+    if (!matchesChildRoute(state.user,route)) {refuseChildRoute();return;}
     state.tab=b.dataset.tab;state.offset=0;setNotice("");
-    if(location.hash==="#requests" && state.tab!=="requests") history.replaceState(null,"",location.pathname+location.search);
+    if(route) history.replaceState(null,"",`#child-${state.tab==="overview"?"report":state.tab}/${route.id}`);
+    else if(location.hash==="#requests" && state.tab!=="requests")
+      history.replaceState(null,"",location.pathname+location.search);
     await render();return;
   }
   if(b.dataset.slot!==undefined && parent()){
@@ -250,8 +296,8 @@ document.addEventListener("submit",async e=>{
     switch(form.id){
       case "login":{
         state.csrf=(await api("/api/auth/csrf")).csrf_token;
-        const user=await api("/api/auth/login","POST",fields);
-        sessionChanges?.postMessage("changed");await openSession(user);return;}
+        await api("/api/auth/login","POST",fields);
+        sessionChanges?.postMessage("changed");await openSession(await api("/api/auth/me"));return;}
       case "new-child":{
         const c=await api("/api/children","POST",fields);await loadChildren(c.id);break;}
       case "password":

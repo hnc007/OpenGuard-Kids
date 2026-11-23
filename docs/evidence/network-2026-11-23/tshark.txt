@@ -1,0 +1,10 @@
+    1 0.000000000    127.0.0.1 → 127.0.0.1    DNS 92 Standard query 0xda9f A north-maze.example.org
+    2 0.001355800    127.0.0.1 → 127.0.0.1    DNS 92 Standard query response 0xda9f No such name A north-maze.example.org
+    3 0.001701100    127.0.0.1 → 127.0.0.1    DNS 94 Standard query 0x1138 A north-school.example.org
+    4 0.002104900    127.0.0.1 → 127.0.0.1    DNS 94 Standard query 0x1138 A north-school.example.org
+    5 0.004577100    127.0.0.1 → 127.0.0.1    DNS 110 Standard query response 0x1138 A north-school.example.org A 192.0.2.1
+    6 0.005214000    127.0.0.1 → 127.0.0.1    DNS 110 Standard query response 0x1138 A north-school.example.org A 192.0.2.1
+    7 0.005620700    127.0.0.1 → 127.0.0.1    DNS 84 Standard query 0x8426 CNAME www.google.com
+    8 0.007845000    127.0.0.1 → 127.0.0.1    DNS 114 Standard query response 0x8426 CNAME www.google.com CNAME forcesafesearch.google.com
+    9 0.008259800    127.0.0.1 → 127.0.0.1    DNS 92 Standard query 0xb0ec A north-maze.example.org
+   10 0.008623800    127.0.0.1 → 127.0.0.1    DNS 108 Standard query response 0xb0ec A north-maze.example.org A 192.0.2.1

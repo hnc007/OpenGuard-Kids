@@ -24,6 +24,19 @@ flowchart LR
 
 **Xóa.** Giao dịch xóa lấy khóa ghi, lưu bằng chứng tối thiểu để thiết bị xác nhận việc xóa, sau đó xóa hồ sơ và tài nguyên liên quan qua khóa ngoại. Thiết bị cũ mất quyền ghi ngay cả khi còn hàng đợi. Dashboard của phụ huynh giữ trạng thái xác nhận riêng cho từng thiết bị, kể cả sau khi hồ sơ biến mất.
 
+## Thành phần đang chạy
+
+|Thành phần|Trách nhiệm hiện tại|Điều kiện vận hành|
+|---|---|---|
+|FastAPI và SQLite|Xác thực web, ghép máy, ký policy, kiểm quyền từng thiết bị, sự kiện, lệnh/ACK, báo cáo, yêu cầu và xóa|Migration 0007 phân biệt thời điểm cho gỡ với lúc quản trị viên báo đã gỡ service lab.|
+|Dashboard|Phụ huynh sửa chính sách, trẻ xem cùng báo cáo và gửi kiến nghị. Bốn liên kết từ khay dẫn thẳng tới trang của trẻ.|Khi trình duyệt đang có phiên người lớn, trang yêu cầu đổi tài khoản trước khi đọc dữ liệu gia đình. Máy dùng chung cần tài khoản Windows hoặc hồ sơ trình duyệt riêng.|
+|Tray tương tác|Đồng hồ, engine luật, cache, outbox, heartbeat và thi hành lệnh trên bộ đếm mô phỏng. Trong VM, tùy chọn tính thời gian ứng dụng tiền cảnh cần đúng SID và đồng ý ngay trên khay.|Mất hiển thị thì dừng lấy mẫu. Nghiệm thu bộ lấy mẫu Win32 và đối chiếu sai số cần VM.|
+|Service lab|Tiến trình LocalService riêng, giao tiếp trạng thái qua named pipe. Trình cài giới hạn đường dẫn, ACL và thao tác SCM.|Tích hợp engine, kho policy/outbox và xử lý lệnh vào service đích còn dang dở. ACL, recovery và đổi tài khoản cần nghiệm thu trên VM.|
+
+Tray gửi phiên bản đang giữ khi mở WSS. Khi phiên bản thay đổi, máy chủ báo version. Tray tải và kiểm chữ ký qua HTTPS, nạp policy rồi mới áp lệnh đi cùng. Khi kênh lệnh bị ngắt, tray thử kết nối lại với khoảng chờ tăng dần. Heartbeat vẫn chạy lúc giao diện tạm dừng. ACK theo UUID gắn với hiệu ứng đã ghi vào SQLite. Tuổi thọ lệnh là 120 giây.
+
+SPEC-EXTENDED mở rộng bộ đếm và chính sách đã ký, truy vấn báo cáo đã phân quyền và xác thực hiện có. E1–E12 kế thừa các thành phần đó. Từng tính năng có phụ thuộc và phép thử trong [kế hoạch triển khai](IMPLEMENTATION_PLAN.md).
+
 ## Kế hoạch cho hai sinh viên
 
 |Tuần|Sinh viên A đề xuất|Sinh viên B đề xuất|Điểm bàn giao|

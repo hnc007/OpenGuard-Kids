@@ -29,6 +29,12 @@ Các giá trị nghiệp vụ trùng thời điểm được giải quyết bằ
 
 ## Quan hệ chính
 
+Phiên WSS của thiết bị có thể truyền phiên bản cache qua `?policy_version=N`. Khi khác phiên bản, frame có `policy_version` cùng mảng `commands`. HTTPS trả tài liệu policy đã ký. Máy chủ tiếp tục phục vụ agent cũ chỉ nhận lệnh. Lịch sử lệnh trên dashboard trả UUID để đối chiếu với ACK của đúng thao tác.
+
+`POST /api/children/{child_id}/devices/{device_id}/lab-removal` cần CSRF và phiên phụ huynh đăng nhập trong 5 phút. Với `stage=authorize` server thu hồi thiết bị và ghi audit. Trình quản trị gửi `stage=report_removed` sau khi kiểm local SCM; mỗi mốc ghi một lần. Xóa hồ sơ dọn hai mốc theo khóa ngoại.
+
+Khi hồ sơ đã bị xóa, trình gỡ có thể xác thực quyền qua biên nhận còn hạn của đúng chủ thiết bị. Nếu biên nhận đã hết hạn, bản cài có ràng buộc chủ sở hữu dùng ID đã lưu trong cấu hình bảo vệ và một phiên phụ huynh mới qua đúng máy chủ ghim. Việc gỡ cục bộ trong trường hợp đó không cấp ACK xóa cache của tray và không tạo lại dữ liệu trên server. [Quy trình và giới hạn bản cũ](../scripts/lab/SERVICE.md)
+
 Trên heartbeat, thiết bị đang hiển thị có thể gửi `remaining_seconds` từ bộ đếm cục bộ. Bản ghi gần nhất được thay thế trong cùng giao dịch, và số còn lại trở về null khi trạng thái chuyển sang paused. Dashboard xem `GET /api/children/{c}/commands` để phân biệt lệnh đang đợi, đã được ACK và hết hạn.
 
 Khi thu hồi và thao tác ghi của thiết bị diễn ra đồng thời, SQLite xác định thứ tự bằng khóa ghi. Thao tác xếp sau thu hồi nhận HTTP 401. API đọc/duyệt yêu cầu và đọc lịch sử cũng kiểm thời hạn tại lúc truy vấn, độc lập với giờ chạy tác vụ dọn dữ liệu.

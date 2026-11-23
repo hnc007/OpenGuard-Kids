@@ -73,6 +73,7 @@ def _private_transport_logs(record: logging.LogRecord) -> bool:
 def create_app(database_url: str | None = None, *, secret_key: str | None = None,
                secure_cookies: bool | None = None) -> FastAPI:
     from .family import prune_expired, router as family_router
+    from .lab_removal import router as removal_router
     from .sync import router as sync_router
 
     for name in ("uvicorn.access", "uvicorn.error", "uvicorn.asgi", "websockets.server"):
@@ -168,6 +169,6 @@ def create_app(database_url: str | None = None, *, secret_key: str | None = None
         return FileResponse(ROOT / "dashboard" / "index.html")
 
     app.mount("/assets", StaticFiles(directory=ROOT / "dashboard" / "static"), name="assets")
-    for router in (auth.router, children.router, sync_router, family_router):
+    for router in (auth.router, children.router, sync_router, family_router, removal_router):
         app.include_router(router)
     return app

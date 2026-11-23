@@ -189,13 +189,13 @@ class AgentClient:
         identity.update(tokens)
         self.store.save_identity(identity, previous=previous)
 
-    def _commands(self, commands, identity, apply_command):
+    def _commands(self, commands, identity, apply_command, now):
         acknowledged = 0
         if apply_command is None:
             return acknowledged
         for command in commands:
             command_id = str(UUID(command["id"]))
-            if command["action"] not in {"lock", "unlock", "add_15"} or int(time.time()) >= command["expires_at"]:
+            if command["action"] not in {"lock", "unlock", "add_15"} or now() >= command["expires_at"]:
                 continue
             # The caller atomically applies the simulated effect and remembers command_id before ACK.
             apply_command(command)
@@ -205,7 +205,8 @@ class AgentClient:
         return acknowledged
 
     def sync_once(self, status: str = "paused", used_seconds: int = 0, apply_command=None,
-                  *, remaining_seconds: int | None = None, simulate_commands: bool = False) -> dict:
+                  *, remaining_seconds: int | None = None, simulate_commands: bool = False,
+                  on_policy_ready=None) -> dict:
         identity = self._identity()
         erased = self._erase_if_requested(identity)
         if erased:
@@ -229,18 +230,23 @@ class AgentClient:
                 heartbeat = self.transport.request("POST", prefix + "/heartbeat", reading, identity["access_token"])
             else:
                 raise
+        received_at = time.monotonic()
         if not cached or cached["version"] != heartbeat["policy_version"] or cached["expires_at"] < now + 86400:
             envelope = self.transport.request("GET", prefix + "/policy", token=identity["access_token"])
             self.store.save_policy(envelope, device_id, key, now=heartbeat["server_time"])
-        if simulate_commands:
-            from agent.screen_time import CounterStore
+        def command_clock():
+            return heartbeat["server_time"] + time.monotonic() - received_at
 
-            counter = CounterStore(self.store.path, device_id)
+        if on_policy_ready is not None:
+            on_policy_ready(command_clock())
+        if simulate_commands:
+            counter = self.store.counter(identity)
             def apply_simulation(command):
-                counter.apply_simulation(command, heartbeat["server_time"])
-            heartbeat["acknowledged_commands"] = self._commands(heartbeat["commands"], identity, apply_simulation)
+                counter.apply_simulation(command, command_clock)
+            heartbeat["acknowledged_commands"] = self._commands(heartbeat["commands"], identity, apply_simulation,
+                                                                command_clock)
         elif status == "visible":
-            self._commands(heartbeat["commands"], identity, apply_command)
+            self._commands(heartbeat["commands"], identity, apply_command, command_clock)
         # A bounded batch per tick keeps a reconnect from monopolizing the service.
         batch = self.store.batch(now=heartbeat["server_time"], enrollment=identity)
         if batch:
@@ -248,15 +254,18 @@ class AgentClient:
             self.store.acknowledge([event["event_id"] for event in batch])
         return heartbeat
 
-    def listen_commands(self, apply_command, visible, seconds: int = 55):
+    def listen_commands(self, apply_command, visible, seconds: float = 55, *, policy_version=None, policy_changed=None,
+                        command_clock=time.time):
         """Run between heartbeats; stop promptly if the tray closes or credentials expire."""
         identity = self._identity()
-        if not visible() or identity.get("erase_pending") or identity["access_until"] <= int(time.time()):
+        if not visible() or identity.get("erase_pending") or identity["access_until"] <= command_clock():
             return
         deadline = time.monotonic() + min(seconds, 60)
         path = f"/api/devices/{identity['device_id']}/commands/ws"
+        if policy_changed is not None and policy_version is not None:
+            path += f"?policy_version={int(policy_version)}"
         with self.transport.socket(path, identity["access_token"]) as channel:
-            while visible() and time.monotonic() < deadline and time.time() < identity["access_until"]:
+            while visible() and time.monotonic() < deadline and command_clock() < identity["access_until"]:
                 try:
                     frame = channel.recv(timeout=min(1, max(0.01, deadline - time.monotonic())))
                 except TimeoutError:
@@ -264,7 +273,11 @@ class AgentClient:
                 except ConnectionClosed:
                     break
                 if visible():
-                    self._commands(json.loads(frame)["commands"], identity, apply_command)
+                    message = json.loads(frame)
+                    if "policy_version" in message and policy_changed is not None:
+                        policy_changed()
+                    if visible():
+                        self._commands(message["commands"], identity, apply_command, command_clock)
 
 
 def main():

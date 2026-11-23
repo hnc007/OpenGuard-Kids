@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import math
 import sqlite3
+from collections.abc import Callable
+from contextlib import closing, contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -120,8 +122,9 @@ class ScreenClock:
 
 class CounterStore:
     """Single writer per device; checkpoints contain totals, never a timeline of user input."""
-    def __init__(self, path: Path, device_id: str):
+    def __init__(self, path: Path, device_id: str, *, write_transaction=None):
         self.path, self.device_id = path, device_id
+        self.write_transaction = write_transaction or self._local_transaction
         with self.connect() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS screen_clock (
@@ -132,8 +135,16 @@ class CounterStore:
                     PRIMARY KEY(device_id, command_id));
             """)
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(self.path, timeout=5)
+        with closing(sqlite3.connect(self.path, timeout=5)) as connection, connection:
+            yield connection
+
+    @contextmanager
+    def _local_transaction(self):
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            yield db
 
     def load(self) -> ClockState:
         with self.connect() as db:
@@ -152,31 +163,36 @@ class CounterStore:
                     :extra_seconds, :parent_locked)""", {"device_id": self.device_id, **asdict(state)})
 
     def save(self, state: ClockState) -> None:
-        with self.connect() as db:
+        with self.write_transaction() as db:
             self._write(db, state)
 
-    def apply_simulation(self, command: dict, server_time: int) -> None:
+    def apply_simulation(self, command: dict, server_time: float | Callable[[], float]) -> None:
         self.apply_command(command, None, server_time)
 
-    def apply_command(self, command: dict, clock: ScreenClock | None, now: float) -> None:
+    def apply_command(self, command: dict, clock: ScreenClock | None, now: float | Callable[[], float],
+                      *, permitted: Callable[[], bool] | None = None) -> None:
         action = command["action"]
-        if action not in {"lock", "unlock", "add_15"} or now >= command["expires_at"]:
-            raise ValueError("Lệnh không hợp lệ hoặc đã hết hạn.")
-        with self.connect() as db:
-            db.execute("BEGIN IMMEDIATE")
+        if action not in {"lock", "unlock", "add_15"}:
+            raise ValueError("Lệnh không hợp lệ.")
+        with self.write_transaction() as db:
+            if permitted is not None and not permitted():
+                raise ValueError("Phiên đã tạm dừng trong lúc chờ ghi lệnh.")
+            applied_at = now() if callable(now) else now
+            if applied_at >= command["expires_at"]:
+                raise ValueError("Lệnh đã hết hạn.")
             if clock is None:
                 db.row_factory = sqlite3.Row
                 row = db.execute("SELECT * FROM screen_clock WHERE device_id=?", (self.device_id,)).fetchone()
                 fields = dict(row) if row else {}
                 fields.pop("device_id", None)
                 s = ClockState(**fields)
-                s.logical_ts = max(s.logical_ts, now)
+                s.logical_ts = max(s.logical_ts, applied_at)
                 day = datetime.fromtimestamp(s.logical_ts, VIETNAM).date().isoformat()
                 if day != s.day:
                     s.day, s.used, s.warned, s.extra_seconds = day, 0, 0, 0
             else:
                 s = ClockState(**asdict(clock.state))
-            db.execute("DELETE FROM applied_time_commands WHERE expires_at<=?", (now,))
+            db.execute("DELETE FROM applied_time_commands WHERE expires_at<=?", (applied_at,))
             inserted = db.execute("INSERT OR IGNORE INTO applied_time_commands VALUES(?,?,?)",
                                   (self.device_id, command["id"], command["expires_at"]))
             if inserted.rowcount != 1:

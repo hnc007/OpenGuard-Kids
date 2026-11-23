@@ -22,7 +22,7 @@ from .models import User
 from .retention import COMMAND_HISTORY, ERASURE_ACK_HISTORY, FAMILY_HISTORY
 from .security import digest
 from .sync import authorized_device, device_auth
-from .sync_models import Device, PairAttempt, PairCode, UsageEvent
+from .sync_models import Device, PairAttempt, PairCode, Policy, UsageEvent
 
 router = APIRouter(prefix="/api")
 ZONE = ZoneInfo("Asia/Ho_Chi_Minh")
@@ -194,7 +194,7 @@ def command_history(child_id: int, request: Request, db: Session = Depends(get_d
     rows = db.execute(select(Command, Device.label).join(Device, Command.device_id == Device.id)
                       .where(Device.child_id == child_id, Command.expires_at >= now - COMMAND_HISTORY)
                       .order_by(Command.created_at.desc(), text("commands.rowid DESC")).limit(50))
-    return [{"action":cmd.action, "device":request.app.state.vault.decrypt(label), "created_at":cmd.created_at,
+    return [{"id":cmd.id, "action":cmd.action, "device":request.app.state.vault.decrypt(label), "created_at":cmd.created_at,
              "status":"acknowledged" if cmd.acknowledged_at else "expired" if cmd.expires_at <= now else "queued"}
             for cmd, label in rows]
 
@@ -215,24 +215,31 @@ def acknowledge_command(cmd_id: str, device: Device = Depends(device_auth), db: 
 
 
 @router.websocket("/devices/{device_id}/commands/ws")
-async def command_socket(ws: WebSocket, device_id: str):
+async def command_socket(ws: WebSocket, device_id: str, policy_version: int | None = None):
     scheme, _, token = ws.headers.get("authorization","").partition(" ")
     if scheme.lower() != "bearer" or ws.headers.get("origin"):
         await ws.close(code=1008)
         return
     def fetch():
         with ws.app.state.sessions() as db:
-            authorized_device(db, device_id, token)
-            return pending_commands(db, device_id)
+            device = authorized_device(db, device_id, token)
+            version = None
+            if policy_version is not None:
+                version = db.scalar(select(Policy.version).where(Policy.child_id == device.child_id)) or 1
+            return pending_commands(db, device_id), version
     try:
-        batch = await asyncio.to_thread(fetch)
+        batch, version = await asyncio.to_thread(fetch)
         await ws.accept()
         sent = {}
         while True:
             now = time.monotonic()
             fresh = [cmd for cmd in batch if now - sent.get(cmd["id"], float("-inf")) >= 5]
-            if fresh:
-                await ws.send_json({"commands":fresh})
+            if fresh or version != policy_version:
+                frame = {"commands": fresh}
+                if version != policy_version:
+                    frame["policy_version"] = version
+                    policy_version = version
+                await ws.send_json(frame)
             sent = {cmd["id"]: (now if cmd in fresh else sent[cmd["id"]]) for cmd in batch}
             try:
                 msg = await asyncio.wait_for(ws.receive(), timeout=1)
@@ -242,7 +249,7 @@ async def command_socket(ws: WebSocket, device_id: str):
                 if msg["type"] != "websocket.disconnect":
                     await ws.close(code=1008)
                 return
-            batch = await asyncio.to_thread(fetch)
+            batch, version = await asyncio.to_thread(fetch)
     except HTTPException:
         await ws.close(code=1008)
     except WebSocketDisconnect:

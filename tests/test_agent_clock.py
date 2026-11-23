@@ -149,3 +149,28 @@ def test_command_state_persists_and_retry_is_idempotent(tmp_path):
     assert sample(restarted, policy, 2).action == "active"
     with pytest.raises(ValueError):
         store.apply_command(command, restarted, MONDAY + 60)
+
+
+@pytest.mark.parametrize("cause", ["deadline", "hidden"])
+def test_recheck_command_after_acquiring_writer(tmp_path, cause):
+    from contextlib import contextmanager
+
+    store = CounterStore(tmp_path / "time.sqlite3", "child")
+    original = store.write_transaction
+    elapsed = [0]
+    visible = [True]
+
+    @contextmanager
+    def delayed():
+        with original() as db:
+            elapsed[0] = 2
+            visible[0] = cause != "hidden"
+            yield db
+
+    store.write_transaction = delayed
+    command = {"id": "1", "action": "add_15", "expires_at": MONDAY + (1 if cause == "deadline" else 10)}
+    with pytest.raises(ValueError, match="hết hạn|tạm dừng"):
+        store.apply_command(command, None, lambda: MONDAY + elapsed[0], permitted=lambda: visible[0])
+    assert store.load().extra_seconds == 0
+    with store.connect() as db:
+        assert db.execute("SELECT count(*) FROM applied_time_commands").fetchone()[0] == 0

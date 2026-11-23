@@ -18,6 +18,15 @@ ESSENTIAL_APPS = {
     "svchost.exe", "explorer.exe", "sihost.exe", "dwm.exe", "taskmgr.exe",
     "smss.exe", "msmpeng.exe", "securityhealthservice.exe", "smartscreen.exe",
     "securityhealthsystray.exe", "narrator.exe", "utilman.exe", "osk.exe",
+    "lockapp.exe", "logonui.exe", "consent.exe", "magnify.exe", "tabtip.exe", "ctfmon.exe",
+}
+# Keep the browser and communication path available for a child's request for help.
+# Website decisions are made separately, including the safety-domain exceptions.
+HELP_APPS = {
+    "phoneexperiencehost.exe", "yourphone.exe", "dialer.exe", "skype.exe", "teams.exe",
+    "ms-teams.exe", "zoom.exe", "zalo.exe", "signal.exe", "whatsapp.exe", "telegram.exe",
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "opera.exe", "iexplore.exe",
+    "vivaldi.exe", "msedgewebview2.exe",
 }
 LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.ASCII)
 
@@ -124,6 +133,8 @@ def app_decision(policy: dict, app: Application, child_sid: str, scope: Scope) -
     name, digest = app.name.casefold(), app.sha256.casefold()
     if app.protected or name in ESSENTIAL_APPS:
         return Decision("allow", "Ứng dụng thiết yếu luôn được phép.")
+    if name in HELP_APPS:
+        return Decision("allow", "Em có thể dùng ứng dụng này để liên hệ hoặc tìm trợ giúp.")
 
     def matches(rule: dict) -> bool:
         expected = rule.get("sha256")

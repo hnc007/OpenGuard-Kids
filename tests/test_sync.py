@@ -213,6 +213,59 @@ class InProcessTransport:
         return response.json() if response.content else {}
 
 
+def test_verified_policy_precedes_same_heartbeat_command(family, tmp_path):
+    from agent.coordinator import DemoSession
+
+    _, browser, child_id, csrf = family
+    store = AgentStore(tmp_path / "agent.db", Fernet(Fernet.generate_key()))
+    agent = AgentClient(store, InProcessTransport.origin)
+    agent.transport = InProcessTransport(browser)
+    device = agent.enroll(pair_code(family), "Máy thử")
+    session = DemoSession(agent, lambda: True, lambda _: None)
+    session.sync()
+    family_path = f"/api/children/{child_id}"
+    browser.put(family_path + "/policy", headers=csrf, json={"version": 1, "weekday_minutes": 9}).raise_for_status()
+    browser.post(f"{family_path}/devices/{device}/commands", headers=csrf, json={"action": "add_15"}).raise_for_status()
+    apply = session.command
+    versions = []
+
+    def observe(command):
+        versions.append(session.policy["version"])
+        apply(command)
+
+    session.command = observe
+    session.sync()
+    assert versions == [2] and session.counter.load().extra_seconds == 900
+    assert browser.get(family_path + "/commands").json()[0]["status"] == "acknowledged"
+
+
+def test_tray_reopens_command_channel_on_resume_and_disconnect():
+    from agent.tray import synchronize_session
+
+    clock = [0.0]
+    stop = threading.Event()
+    session = Mock(erased=False, available=True, policy={"version": 3})
+    session.ready.side_effect = lambda: clock[0] >= 2
+    attempts = []
+
+    def listen(_apply, visible, **kwargs):
+        assert visible() and kwargs["policy_version"] == 3
+        attempts.append(clock[0])
+        if len(attempts) == 1:
+            raise ConnectionError()
+        stop.set()
+
+    def advance(delay):
+        assert 0 < delay <= 1
+        clock[0] += delay
+
+    session.client.listen_commands.side_effect = listen
+    stop.wait = advance
+    synchronize_session(session, stop, Mock(), lambda: clock[0])
+    assert attempts == [2, 3]
+    session.sync.assert_called_once()
+
+
 def test_full_agent_roundtrip_duplicate_recovery_and_offline_wipe(family, tmp_path):
     app, client, cid, csrf = family
     store = AgentStore(tmp_path / "agent.db", Fernet(Fernet.generate_key()))

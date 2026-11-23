@@ -1,0 +1,8 @@
+scenario,result,filter_queries
+filtered_udp_control,NXDOMAIN,1
+alternate_resolver_fixture,192.0.2.1,0
+https_dns_fixture,192.0.2.1,0
+tls_dns_fixture,192.0.2.1,0
+https_numeric_address_fixture,local-synthetic-lesson,0
+https_fixed_reverse_proxy_fixture,local-synthetic-lesson,0
+synthetic_child_scope_inactive,192.0.2.1,1

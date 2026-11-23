@@ -1,5 +1,24 @@
 # Tiến độ OpenGuard Kids
 
+## Phạm vi và tiến độ ngày 23/11/2026
+
+Toàn bộ CORE, SPEC-EXTENDED và E1–E12 có mã truy vết, phụ thuộc, cách kiểm và trạng thái riêng. Các mốc cũ phía dưới giữ nguyên để so sánh. [Ma trận yêu cầu](docs/REQUIREMENTS_TRACEABILITY.md) · [Kế hoạch](docs/IMPLEMENTATION_PLAN.md) · [Quyết định](docs/DECISIONS.md)
+
+Trong 52 tiêu chí CORE, 31 có trạng thái VERIFIED và 21 còn IN PROGRESS. Trong 9 tiêu chí SPEC-EXTENDED, 7 chưa bắt đầu, 1 đang triển khai và 1 đã có mã chờ nghiệm thu. Trong 12 PRODUCT-EXTRAS, 9 có thành phần từ chức năng gốc và 3 chưa bắt đầu. Bảng BLOCKED trong ma trận ghi riêng những phép thử phụ thuộc môi trường hoặc người xác nhận. Các số đếm phản ánh tiêu chí, mỗi tiêu chí có khối lượng khác nhau.
+
+Lượt cuối trên Windows build 26200 và Python 3.11.9 đạt **197/197 pytest** trong **109,42 giây**, 0 lỗi, 0 bỏ qua và 1 cảnh báo deprecation từ Starlette TestClient. Edge headless dùng hai tài khoản trẻ và kiểm CLI/tray cộng tổng cộng 1.800 giây trên đúng máy giả. Khi cookie thuộc hồ sơ khác, trang từ khay dừng trước mọi truy vấn dữ liệu gia đình. [Nhật ký](docs/evidence/full-scope-2026-11-23/verification-final.txt) · [JUnit](docs/evidence/full-scope-2026-11-23/verification-final.xml) · [Ảnh chụp log](docs/evidence/full-scope-2026-11-23/verification-final.png) · [Biên bản Edge](docs/evidence/full-scope-2026-11-23/browser-final.txt)
+
+|Phần việc|Trạng thái|Kết quả hoặc bước tiếp|
+|---|---|---|
+|Nhận và áp dụng policy/lệnh trong tray mô phỏng|VERIFIED|WSS thông báo phiên bản, nạp policy đã ký trước lệnh cùng heartbeat, thử lại sau gián đoạn và hiện ACK theo UUID. 30 lần từ PUT tới áp policy và từ gửi +15 phút tới phụ huynh thấy ACK. [CSV](docs/evidence/full-scope-2026-11-23/tray-worker/live-sync-samples.csv)|
+|Ổn định dữ liệu khi offline hoặc bị thu hồi|VERIFIED|Bộ đếm vẫn tính khi đồng bộ bị treo. Kiểm ghi đúng lần ghép máy ngay trong giao dịch SQLite để một tác vụ cũ không ghi lại dữ liệu đã xóa. [Kiểm thử](tests/test_agent_session.py)|
+|Dữ liệu F2 và ngoại lệ an toàn|VERIFIED|Đủ 200 hostname công khai và 240 fixture, 6 nhóm. Hai danh sách riêng cho phân loại và ngoại lệ. [Nguồn danh mục](agent/data/README.md)|
+|Ghi thời lượng app trên Windows, NT1/NT6|IN PROGRESS|Code lấy mẫu chỉ đúng console/SID và có đồng ý. Input tổng hợp và báo cáo hai vai trò đã thử. Còn kiểm desktop, sai số một giờ, trợ giúp và hành động native trên VM. [Agent và phép đo](docs/AGENT.md)|
+|TLS, CERT pinning và luồng service lab|IN PROGRESS|HTTPS/WSS đã qua đổi chứng chỉ cùng CA. Cài/gỡ/recovery đang ở mức mock, IPC có phép thử cục bộ. [Diễn tập TLS](docs/SYNC.md) · [Service lab](scripts/lab/SERVICE.md)|
+|Báo cáo kỹ thuật|IN PROGRESS|Phụ lục mới có ảnh Wireshark mở PCAP, dữ liệu CPU/RAM, độ trễ, suy giảm khi lỗi và thử đồng hồ. Còn phép thử trên Windows VM và LAN. [PDF có đủ M1–M6](docs/BaoCaoKyThuatMang-2026-11-23.pdf) · [CSV và phương pháp](docs/NETWORK_EVIDENCE.md)|
+|Nghiệm thu máy đích|BLOCKED|Cần VM sạch, hai tài khoản, snapshot và quyền riêng cho từng thử nghiệm SCM, adapter, khóa/ứng dụng. Mã service hiện chỉ cung cấp IPC trạng thái, cần tích hợp phần thực thi. Cần nhóm sinh viên xác nhận đóng góp.|
+|SPEC-EXTENDED và E1–E12|IN PROGRESS|Đã tích hợp một phần quy trình gỡ và dùng lại được một số thành phần gốc. Quota nhóm, nhiệm vụ thưởng, DoH/WFP, PDF/CSV gia đình, 20-20-20, pause hai giờ, TOTP và các luồng sản phẩm vẫn có mục nghiệm thu riêng trong ma trận.|
+
 Nguồn chấm là `QuanLyMayTinhTreEm.docx` tại gốc repo. Đề có các mục 1, 2, 4, 5, 6, 8 và phụ lục. Sơ đồ kiến trúc nằm trong văn bản. Prompt bổ sung yêu cầu chạy an toàn trên máy phát triển, TCP DNS, ma trận trạng thái, bộ đếm qua reboot và xóa thiết bị ngoại tuyến.
 
 |Giai đoạn|Trạng thái|Bằng chứng hoặc điều kiện kết thúc|

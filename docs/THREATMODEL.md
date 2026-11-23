@@ -34,6 +34,10 @@ Khả năng và tác động dưới đây là nhận định thiết kế cho b
 
 ## Checklist kiểm chứng bảo mật ứng dụng
 
+Trong luồng gỡ lab, phụ huynh xác thực lại qua HTTPS có ghim, backend ghi hai mốc cho phép gỡ và báo đã gỡ. Người có quyền quản trị máy vẫn có thể tác động service ngoài ứng dụng. Cần đối chiếu với SCM trong VM. Bộ lấy mẫu native chỉ phục vụ một SID ở phiên console đang hiển thị. Ứng dụng liên lạc và trình duyệt được miễn trong engine và trong bộ lấy mẫu. Danh sách này cần được rà khi bàn giao máy vì mỗi gia đình có thể dùng phần mềm trợ giúp khác nhau.
+
+Phiên bản WSS chỉ đánh thức đường lấy policy đã ký. Bản tin đến cùng lệnh phải áp policy thành công trước khi ACK. Cache DNS trong RAM chỉ giữ câu trả lời địa chỉ đủ điều kiện, bỏ qua miền trợ giúp và bản ghi văn bản. Dừng giao diện vô hiệu hóa các yêu cầu đang chờ điền cache.
+
 Các nhóm dưới đây áp dụng OWASP ASVS 5.0.0 cho phần web và API. Trạng thái mô tả phạm vi kiểm tra của đồ án. [OWASP ASVS 5.0.0](https://asvs.owasp.org/)
 
 | Hạng mục | Bằng chứng có thể chạy lại | Việc kiểm tra tiếp |

@@ -14,6 +14,7 @@ import webbrowser
 from contextlib import ExitStack
 from ctypes import wintypes
 from pathlib import Path
+from websockets.exceptions import WebSocketException
 
 from agent.client import AgentClient, device_process, erasure_message
 from agent.coordinator import DemoSession, LabDns, RestNotice
@@ -24,12 +25,55 @@ class Visibility:
     """A stalled or closed user interface must not authorise another sample/command."""
     def __init__(self, mono=time.monotonic):
         self.mono, self.deadline = mono, 0
+        self.generation = 0
 
     def update(self, shown):
+        if self() != bool(shown):
+            self.generation += 1
         self.deadline = self.mono() + 1.5 if shown else 0
 
     def __call__(self):
         return self.mono() < self.deadline
+
+
+def synchronize_session(session, stopped, notice, mono=time.monotonic):
+    """Use the socket while the child UI is present; keep heartbeat active while paused."""
+    retry_delay = 1
+    next_heartbeat = mono()
+    errors = (OSError, RuntimeError, ValueError, WebSocketException, sqlite3.Error)
+
+    def active():
+        return not stopped.is_set() and session.ready() and session.available
+
+    while not stopped.is_set() and not session.erased:
+        if mono() >= next_heartbeat:
+            next_heartbeat = mono() + 60
+            try:
+                session.sync()
+                retry_delay = 1
+            except errors:
+                session.check_identity()
+                notice("Chưa đồng bộ được. Em có thể dùng quy tắc đã xác minh còn hạn.")
+                stopped.wait(retry_delay)
+                next_heartbeat = mono()
+                retry_delay = min(8, retry_delay * 2)
+                continue
+        if session.erased:
+            break
+        remaining = max(0, next_heartbeat - mono())
+        if not active():
+            stopped.wait(min(1, remaining))
+            continue
+        try:
+            session.client.listen_commands(session.command, active, seconds=remaining,
+                                           policy_version=session.policy["version"], policy_changed=session.sync,
+                                           command_clock=session.now)
+        except errors:
+            session.check_identity()
+            notice("Kênh lệnh bị gián đoạn. Máy đang kết nối lại.")
+        if active():
+            stopped.wait(min(retry_delay, max(0, next_heartbeat - mono())))
+            retry_delay = min(8, retry_delay * 2)
 
 
 class RestWindows:
@@ -55,8 +99,16 @@ class RestWindows:
         self.window.refresh(notice)
 
 
+def open_child_page(origin, page, child_id):
+    if page not in {"time", "appeal", "report", "privacy"}:
+        return False
+    if type(child_id) is not int or not 0 < child_id <= 2**53 - 1:
+        return False
+    return webbrowser.open(f"{origin}/#child-{page}/{child_id}")
+
+
 class RestDialog:
-    def __init__(self, parent, dismiss, origin):
+    def __init__(self, parent, dismiss, open_child):
         import tkinter as tk
         from tkinter import ttk
 
@@ -72,7 +124,7 @@ class RestDialog:
         ttk.Label(box, textvariable=self.time).pack(anchor="w", pady=(8, 4))
         ttk.Label(box, textvariable=self.reason, wraplength=400).pack(anchor="w", pady=(0, 8))
         ttk.Button(box, text="Xin thêm giờ trong Góc của em",
-                   command=lambda: webbrowser.open(origin + "/#requests")).pack(anchor="w", pady=2)
+                   command=lambda: open_child("time")).pack(anchor="w", pady=2)
         ttk.Label(box, text="Nếu cần người giúp, em có thể dùng điện thoại gọi 111.",
                   wraplength=400).pack(anchor="w", pady=(10, 2))
         ttk.Button(box, text="Mở trang Tổng đài 111",
@@ -225,20 +277,22 @@ def prepare_enrollment(client, previous_session_ended=False) -> bool:
     return paired
 
 
-def run(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns_port=53, lab_app=False, lab_rest=False):
+def run(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns_port=53, lab_app=False, lab_rest=False,
+        lab_foreground=False):
     ended = False
     while prepare_enrollment(client, ended):
-        if not run_session(client, input_sample, lab_ipc, dns_upstream, dns_port, lab_app, lab_rest):
+        if not run_session(client, input_sample, lab_ipc, dns_upstream, dns_port, lab_app, lab_rest, lab_foreground):
             return
         ended = True
 
 
-def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns_port=53, lab_app=False, lab_rest=False):
+def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns_port=53, lab_app=False, lab_rest=False,
+                lab_foreground=False):
     import tkinter as tk
     from tkinter import messagebox, ttk
-    from websockets.exceptions import WebSocketException
 
     lease = Visibility()
+    foreground_lease = Visibility()
     messages = queue.Queue(maxsize=16)
     def notice(message):
         try:
@@ -246,7 +300,8 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
             return True
         except queue.Full:
             return False
-    session = DemoSession(client, lease, notice, input_sample=input_sample)
+    session = DemoSession(client, lease, notice, input_sample=input_sample,
+                          foreground_consent=foreground_lease if lab_foreground else None)
     window = tk.Tk()
     window.title("OpenGuard Kids • Máy mô phỏng")
     window.minsize(460, 300)
@@ -256,8 +311,11 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
     status = tk.StringVar(value="Đang chuẩn bị khay hệ thống.")
     ttk.Label(panel, textvariable=status, wraplength=420).pack(anchor="w", pady=(8, 4))
     ttk.Label(panel, text="Ứng dụng này ghi nhận gì về em?", font=("Segoe UI", 12)).pack(anchor="w", pady=(10, 2))
-    ttk.Label(panel, wraplength=420, text="Đây là máy mô phỏng. Khi em mở phiên, thời gian của ứng dụng mẫu, "
-              "cảnh báo và lần thử trang mẫu sẽ hiện trong báo cáo gia đình. Em có thể tạm dừng bất cứ lúc nào.").pack(anchor="w")
+    privacy_text = ("Đây là tài khoản thử. Nếu em chọn tính giờ ứng dụng, gia đình sẽ thấy tên tệp chương trình "
+                    "đang dùng và số giây. Cửa sổ, tài liệu và nội dung em nhập thuộc về em."
+                    if lab_foreground else "Đây là máy mô phỏng. Khi em mở phiên, thời gian của ứng dụng mẫu, "
+                    "cảnh báo và lần thử trang mẫu sẽ hiện trong báo cáo gia đình. Em có thể tạm dừng bất cứ lúc nào.")
+    ttk.Label(panel, wraplength=420, text=privacy_text).pack(anchor="w")
     if input_sample:
         ttk.Label(panel, wraplength=420, text="Trong phòng lab, đồng hồ dùng thời điểm tương tác gần nhất "
                   "trên tài khoản thử để tạm dừng khi em đi vắng.").pack(anchor="w", pady=4)
@@ -265,9 +323,28 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
         ttk.Label(panel, wraplength=420, text="VM thử nghiệm đang dùng bộ lọc DNS cục bộ. "
                   "Báo cáo chỉ lưu miền đăng ký. Các cổng trợ giúp luôn được phép.").pack(anchor="w", pady=4)
     running = tk.BooleanVar(value=False)
-    ttk.Checkbutton(panel, variable=running, text="Bắt đầu phiên mô phỏng trên hồ sơ thử nghiệm").pack(anchor="w", pady=6)
+    track_apps = tk.BooleanVar(value=False)
+    current_app = tk.StringVar(value="")
+    resolver = None
+    def pause():
+        lease.update(False)
+        foreground_lease.update(False)
+        if resolver:
+            resolver.clear_cache()
+        if lab_foreground:
+            current_app.set("Đang dừng tính giờ ứng dụng.")
+    ttk.Checkbutton(panel, variable=running, command=lambda: None if running.get() else pause(),
+                    text="Bắt đầu phiên trên hồ sơ thử nghiệm").pack(anchor="w", pady=6)
+    window.bind("<Unmap>", lambda event: pause() if event.widget is window else None)
+    if lab_foreground:
+        ttk.Checkbutton(panel, variable=track_apps, command=lambda: foreground_lease.update(False),
+                        text="Cho tính giờ ứng dụng em đang dùng trong tài khoản lab").pack(anchor="w", pady=2)
+        ttk.Label(panel, textvariable=current_app, wraplength=420).pack(anchor="w")
     show_rest = tk.BooleanVar(value=False)
-    rest = RestWindows(lambda dismiss: RestDialog(window, dismiss, client.transport.origin))
+    def open_child(page):
+        return open_child_page(client.transport.origin, page, session.identity.get("child_id"))
+
+    rest = RestWindows(lambda dismiss: RestDialog(window, dismiss, open_child))
     if lab_rest:
         ttk.Checkbutton(panel, variable=show_rest,
                         text="Hiện cửa sổ nhắc nghỉ khi đến giờ trên tài khoản lab này").pack(anchor="w", pady=2)
@@ -290,8 +367,9 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
         else:
             note.set("Đang đồng bộ. Em thử lại sau giây lát nhé.")
     ttk.Button(panel, text="Thử quy tắc với trang mẫu", command=try_site).pack(anchor="w", pady=4)
-    ttk.Button(panel, text="Mở báo cáo và gửi ý kiến",
-               command=lambda: webbrowser.open(client.transport.origin + "/")).pack(anchor="w")
+    for label, page in (("Xin thêm giờ", "time"), ("Em nghĩ trang này bị chặn nhầm", "appeal"),
+                        ("Hôm nay em đã dùng gì?", "report"), ("Quyền riêng tư của em", "privacy")):
+        ttk.Button(panel, text=label, command=lambda route=page: open_child(route)).pack(anchor="w")
     if lab_ipc:
         from agent.lab_service import service_status
         def probe():
@@ -390,34 +468,23 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
             stopped.set()
 
     def synchronize():
-        while not stopped.is_set() and not session.erased:
-            deadline = time.monotonic() + 60
-            try:
-                session.sync()
-                if session.erased:
-                    break
-                if session.ready() and session.available:
-                    client.listen_commands(session.command, lambda: session.ready() and session.available, seconds=55)
-            except (OSError, RuntimeError, ValueError, WebSocketException, sqlite3.Error):
-                session.check_identity()
-                notice("Chưa đồng bộ được. Em có thể dùng quy tắc đã xác minh còn hạn.")
-            stopped.wait(max(0, deadline - time.monotonic()))
+        synchronize_session(session, stopped, notice)
 
     def update():
         nonlocal workers_started
         if session.erased:
-            lease.update(False)
+            pause()
             rest.update(None)
             stopped.set()
             window.quit()
             return
         if stopped.is_set():
-            lease.update(False)
+            pause()
             rest.update(None)
             status.set("Phiên đã dừng.")
             return
         if not icon.present():
-            lease.update(False)
+            pause()
             rest.update(None)
             if workers_started:
                 stopped.set()
@@ -425,6 +492,10 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
         else:
             enabled = running.get() and window.state() == "normal"
             lease.update(enabled)
+            foreground_lease.update(lab_foreground and enabled and track_apps.get())
+            if lab_foreground:
+                active_name = session.foreground.name if foreground_lease() and session.ready() else None
+                current_app.set(f"Đang tính giờ: {active_name}" if active_name else "Đang dừng tính giờ ứng dụng.")
             rest.update(session.current_lab_rest() if lab_rest and enabled and show_rest.get() else None)
             if enabled and not workers_started:
                 workers_started = True
@@ -448,7 +519,7 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
             finally:
                 session.lock.release()
         stopped.set()
-        lease.update(False)
+        pause()
         rest.update(None)
         window.quit()
     window.protocol("WM_DELETE_WINDOW", close)
@@ -464,6 +535,7 @@ def run_session(client, input_sample=None, lab_ipc=False, dns_upstream=None, dns
             window.mainloop()
     finally:
         lease.update(False)
+        foreground_lease.update(False)
         stopped.set()
         if active_trial:
             active_trial.pop().process.release()
@@ -485,10 +557,11 @@ def main():
     parser.add_argument("--lab-dns-port", type=int, default=53)
     parser.add_argument("--lab-app", action="store_true", help="Hiện nút thử quy tắc với một Notepad trống vừa mở.")
     parser.add_argument("--lab-rest", action="store_true", help="Cho phép bật cửa sổ nghỉ tự nguyện trên tài khoản lab.")
+    parser.add_argument("--lab-foreground", action="store_true", help="Cho phép tự nguyện tính giờ ứng dụng ở tiền cảnh trên VM.")
     args = parser.parse_args()
     if os.name != "nt":
         parser.exit(2, "Khay này cần Windows 10/11.\n")
-    if (args.lab_app or args.lab_rest) and not args.lab_input_sid:
+    if (args.lab_app or args.lab_rest or args.lab_foreground) and not args.lab_input_sid:
         parser.error("Tùy chọn này cần SID của Standard User lab.")
     if args.lab_dns_upstream:
         try:
@@ -506,7 +579,7 @@ def main():
                 from agent.lab_input import LabInput
                 input_sample = LabInput(args.lab_input_sid)
             run(AgentClient(AgentStore(args.store), args.server, args.pin, args.ca), input_sample, args.lab_ipc,
-                args.lab_dns_upstream, args.lab_dns_port, args.lab_app, args.lab_rest)
+                args.lab_dns_upstream, args.lab_dns_port, args.lab_app, args.lab_rest, args.lab_foreground)
     except (ValueError, RuntimeError, OSError, sqlite3.Error) as error:
         parser.exit(1, f"Không mở được phiên. {error}\n")
 

@@ -1,0 +1,8 @@
+wall_offset_s,first_alert,duplicate_after_restart,durable_alerts,billed_s,logical_elapsed_s
+-10800,True,False,1,2.0,2.0
+-91,True,False,1,2.0,2.0
+-90,False,False,0,2.0,2.0
+0,False,False,0,2.0,2.0
+90,False,False,0,2.0,2.0
+91,True,False,1,2.0,2.0
+10800,True,False,1,2.0,2.0

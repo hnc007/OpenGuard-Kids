@@ -30,6 +30,8 @@ Nếu em cần người giúp, em có thể gọi Tổng đài quốc gia bảo 
 |audits.id, child_id, actor_id, ts, action, before_cipher, after_cipher, ip_cipher|Giải thích ai đã sửa gì|Máy chủ|90 ngày hoặc xóa hồ sơ|Gia đình; IP quản trị chỉ cho phụ huynh|Mã hóa IP và giá trị cũ/mới; không ghi mã ghép hoặc mật khẩu|
 |commands.id, action, device_id, created_at, expires_at, acknowledged_at|Gửi lệnh, tránh phát lại|Máy chủ; danh sách ID đã áp ở agent|Lệnh hết hiệu lực sau 120 giây, dọn bản ghi server sau 1 ngày|Thiết bị và phụ huynh liên quan|Token, kiểm tra thời hạn, ACK|
 |erasures.device_id, parent_id, proof_hash, created_at, acknowledged_at|Nhận yêu cầu xóa, chứng minh đã dọn thiết bị|Máy chủ|Chờ xác nhận; dọn sau ACK 7 ngày|Phụ huynh thấy trạng thái, thiết bị chứng minh quyền|Giữ hash của khóa xóa; biên nhận chỉ chứa định danh kỹ thuật|
+|lab_removals.device_id, authorized_at, reported_at|Phân biệt phụ huynh cho gỡ với quản trị viên báo đã gỡ|Máy chủ|Theo vòng đời thiết bị, xóa theo hồ sơ|Phụ huynh đúng hồ sơ, backend|Phiên phụ huynh vừa đăng nhập và CSRF. Audit có hạn riêng 90 ngày.|
+|service.json và các dấu tiến trình cài/gỡ lab|Khởi động lại đúng SID và xác minh chủ sở hữu khi gỡ, kể cả sau khi xóa hồ sơ|ProgramData của VM|Tới khi hoàn tất gỡ|SYSTEM/Administrators được ghi, LocalService được đọc|Có SID, ID phụ huynh, trẻ và thiết bị, địa chỉ server, ghim và CA công khai. Mật khẩu được nhập tại terminal khi xác thực.|
 |public_id_counters.resource, last_id|Ngăn tab cũ sửa nhầm hồ sơ hoặc yêu cầu vừa tạo|Máy chủ|Theo vòng đời cơ sở dữ liệu|Backend|Chỉ giữ giá trị thứ tự theo bảng, không lưu danh tính đã xóa|
 |screen_clock và applied_time_commands|Giữ quota, cảnh báo lùi đồng hồ, lệnh đã nhận sau restart|SQLite agent|Theo ngày hoặc hạn lệnh; xóa khi nhận yêu cầu xóa|Bộ đếm và UI cùng phiên|Tổng cộng, không có lịch sử phím/chuột. ACL sản xuất cần lab xác minh|
 
@@ -38,6 +40,10 @@ Máy chủ chạy dọn dữ liệu lúc khởi động và mỗi giờ. Một b
 Dashboard xóa dữ liệu đang hiển thị ở các tab cùng phiên trình duyệt khi một tab đăng xuất, đổi mật khẩu hoặc xóa hồ sơ. Khi trở lại một tab đã ẩn, dashboard xác minh lại phiên trước khi hiện dữ liệu. Mã ghép được đưa vào đúng biểu mẫu của hồ sơ đã tạo mã.
 
 Tới hạn lưu, API ngừng trả lịch sử yêu cầu, lệnh và kiểm toán theo thời hạn tương ứng trong bảng, kể cả khi tiến trình dọn SQLite chưa tới lượt chạy. Trẻ và phụ huynh đều chịu cùng giới hạn. Biên nhận xóa cho máy ngoại tuyến vẫn ở trạng thái chờ tới khi có xác nhận.
+
+Trong VM, khi trẻ chủ động bật tính giờ ứng dụng, tray đọc tên tệp .exe của cửa sổ tiền cảnh thuộc đúng tài khoản. Khi cần đối chiếu quy tắc ứng dụng, SHA-256 được tính cục bộ. Báo cáo chỉ nhận tên tệp và số giây. Các ứng dụng hệ thống, trình duyệt và chương trình liên lạc được miễn theo danh sách của agent. Trẻ có thể tắt ngay trên khay.
+
+Khi mở “Góc của em” từ khay, mã hồ sơ ghép nằm trong fragment của địa chỉ trình duyệt. Trình duyệt dùng mã này để đối chiếu vai trò và hồ sơ với phiên đã xác thực trước khi tải báo cáo. URL dùng cho mục đích này chỉ chứa trang cần mở và ID kỹ thuật. Lịch sử trình duyệt trên máy dùng chung có thể giữ địa chỉ đó.
 
 ## Phạm vi sử dụng hợp pháp
 

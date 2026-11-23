@@ -80,3 +80,24 @@ Trên Windows build 26200 với Python 3.11.9, cả 90 lần thử đều khôi 
 |Khởi động lại tiến trình agent và đồng bộ|1.597,852|1.697,183|
 
 Các số của phép đo kênh trước đó trên cùng môi trường là 112,817 ms ở p95 từ PUT đến cache tại nhịp chủ động, 944,465 ms từ POST đến khi nhận lệnh WSS, và 960,883 ms từ POST đến ACK. [Số đo từng mẫu đồng bộ](evidence/sync-samples.csv) · [Số đo từng mẫu phục hồi](evidence/recovery-samples.csv)
+
+## Nhận policy và lệnh trong tray
+
+Luồng tray hiện có thông báo version qua WSS. Bộ đếm tiếp tục chạy trong khi HTTPS chờ mạng, dùng chính sách đã xác minh còn hạn. Trước khi ghi lệnh, agent kiểm lại hạn và trạng thái phiên sau khi lấy được quyền ghi SQLite. “Hết hạn chờ xác nhận từ máy” có nghĩa là server chưa nhận ACK đúng hạn. Đối chiếu số dư trên máy nếu kết nối bị ngắt giữa lúc ghi bộ đếm và gửi ACK. [30 chu kỳ policy/lệnh với bộ đếm mô phỏng](evidence/full-scope-2026-11-23/tray-worker/live-sync-summary.json)
+
+## Diễn tập xoay chứng chỉ máy chủ trên cùng CA (S3)
+
+Trước khi thay chứng chỉ, phân phối hai mã SHA-256 của chứng chỉ máy chủ theo dạng `--pin <ghim_cũ>,<ghim_mới>` và giữ nguyên CA. Sau khi máy chủ đã dùng chứng chỉ mới, kiểm tra agent đọc được chính sách qua HTTPS và kết nối lại được kênh lệnh WSS. Khi các agent đã chuyển xong, bỏ ghim cũ. Từ thời điểm đó, nếu máy chủ vô tình phục hồi chứng chỉ cũ, cần đưa chứng chỉ mới trở lại để kết nối được với các agent chỉ giữ ghim mới.
+
+| Chứng chỉ máy chủ | Agent chỉ giữ ghim cũ | Agent giữ cả hai | Agent chỉ giữ ghim mới |
+|---|---|---|---|
+| Cũ, trước khi đổi | Kết nối được | Kết nối được | Từ chối ghim |
+| Mới, sau khi đổi | Từ chối ghim | Kết nối được | Kết nối được |
+
+Ngày 23/11/2026, hai ca tích hợp HTTPS và WSS đều đạt trên `127.0.0.1`. Mỗi ca cấp hai chứng chỉ khác khóa từ cùng một CA tạm, ghép đôi thiết bị giả một lần, rồi lần lượt khởi động máy chủ với chứng chỉ cũ, mới, cũ và mới trên cùng cổng. Trong mỗi lần kết nối thành công, agent dùng lại cùng token để đọc chính sách của thiết bị hoặc nhận thông báo phiên bản đầu tiên qua WSS. Cả hai kênh đều từ chối chứng chỉ mới khi thiếu CA tin cậy dù ghim mới đúng. Sau khi bỏ ghim cũ, cả hai cũng từ chối lần phục hồi chứng chỉ cũ và kết nối lại khi máy chủ nạp lại chứng chỉ mới.
+
+Chạy lại phép thử sau từ thư mục dự án. Chứng chỉ, khóa máy chủ và SQLite của mỗi ca nằm trong thư mục tạm được dọn khi kết thúc. Phạm vi đã kiểm là các kết nối mới sau mỗi lần máy chủ khởi động lại, với cùng CA và cùng địa chỉ. [Mã kiểm thử](../tests/test_tls_rotation.py)
+
+```powershell
+.\scripts\run-tests.ps1 -q tests/test_tls_rotation.py
+```

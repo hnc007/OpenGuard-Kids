@@ -1,4 +1,4 @@
-"""Visible development session. Only synthetic activity reaches the paired demo profile."""
+"""Visible development session with separate, voluntary controls for a dedicated Windows lab."""
 from __future__ import annotations
 
 import sqlite3
@@ -8,8 +8,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
-from agent.policy import Decision, DomainRules, Scope
-from agent.screen_time import CLOCK_ALERT_SECONDS, VIETNAM, CounterStore, ScreenClock
+from agent.lab_input import PRIVATE_APPS
+from agent.policy import Decision, DomainRules, Scope, app_decision
+from agent.screen_time import CLOCK_ALERT_SECONDS, IDLE_SECONDS, MAX_SAMPLE_GAP, VIETNAM, ScreenClock
+from agent.store import same_enrollment
+from shared.protocol import executable
 
 
 @dataclass(frozen=True)
@@ -38,21 +41,98 @@ class RestNotice:
         return " ".join(lines)
 
 
+class ForegroundAccounting:
+    """One contiguous, sampled foreground segment in memory. Reports receive only its basename."""
+    def __init__(self, session, consent):
+        self.session, self.consent = session, consent
+        self.clear()
+
+    def clear(self):
+        self.name = self.digest = None
+        self.seconds = 0.0
+        self.last_tick = self.end = 0.0
+        self.version = None
+        self.generation = self.consent.generation
+
+    def permitted(self):
+        return self.consent() and self.session.ready()
+
+    def suspend(self):
+        self.session.input_sample.reset_foreground()
+        self.clear()
+
+    def flush(self):
+        seconds = int(self.seconds)
+        if (self.name and seconds and self.permitted() and self.generation == self.consent.generation
+                and self.session.input_sample.console_available()):
+            self.session.event("app_stop", self.name, seconds, at=int(self.end), version=self.version)
+            self.seconds -= seconds
+
+    def sample(self, charged, *, active):
+        session = self.session
+        if not self.permitted() or self.generation != self.consent.generation:
+            self.suspend()
+        if not self.permitted():
+            return
+        if not active:
+            self.flush()
+            self.clear()
+            return
+        policy = session.policy
+        rules_configured = bool(policy["allowed_apps"] or policy["blocked_apps"])
+        app = session.input_sample.foreground(self.permitted, needs_hash=rules_configured)
+        if not self.permitted() or self.generation != self.consent.generation:
+            self.suspend()
+            return
+        name = None
+        if app and app.owner_sid == session.input_sample.sid and not app.protected:
+            try:
+                candidate = executable(app.name)
+                if candidate not in PRIVATE_APPS:
+                    name = candidate
+            except ValueError:
+                name = None
+        tick, logical = session.mono(), session.clock.state.logical_ts
+        contiguous = (app and name == self.name and app.sha256 == self.digest and self.version == policy["version"]
+                      and 0 <= tick - self.last_tick <= MAX_SAMPLE_GAP
+                      and abs((logical - self.end) - (tick - self.last_tick)) < 2)
+        if not name or not contiguous:
+            self.flush()
+            self.clear()
+            if not name:
+                return
+            self.name, self.digest, self.version = name, app.sha256, policy["version"]
+            if rules_configured and app.sha256:
+                decision = app_decision(policy, app, session.input_sample.sid, Scope(True, True, True))
+                if decision.action == "block" and self.permitted():
+                    session.notice(f"{name}: {decision.reason} Người đặt quy tắc: {decision.issuer}. "
+                                   "Em có thể xem quy tắc cùng phụ huynh trong Góc của em. Đây là lời nhắc.")
+        else:
+            # At a switch or missing sample the interval has no defensible owner.
+            self.seconds += charged
+        self.last_tick, self.end = tick, logical
+        if self.seconds >= 30:
+            self.flush()
+
+
 class DemoSession:
     def __init__(self, client, visible: Callable[[], bool], notice: Callable[[str], None],
-                 wall=time.time, mono=time.monotonic, input_sample=None):
+                 wall=time.time, mono=time.monotonic, input_sample=None, foreground_consent=None):
         self.client, self.store = client, client.store
         self.visible, self.notice = visible, notice
         self.wall, self.mono = wall, mono
         self.input_sample = input_sample
+        self.foreground = ForegroundAccounting(self, foreground_consent) if foreground_consent is not None else None
         self.available = False
         self.remaining_seconds = None
-        self.lock = threading.RLock()
+        self.lock = self.store.activity_lock
+        self.sync_lock = threading.Lock()
+        self.erased = False
         self.identity = self.store.identity()
         if (not self.identity or self.identity.get("erase_pending")
                 or self.identity["origin"] != client.transport.origin):
             raise ValueError("Hãy ghép đôi một máy mô phỏng với máy chủ này trước.")
-        self.counter = CounterStore(self.store.path, self.identity["device_id"])
+        self.counter = self.store.counter(self.identity)
         self.clock = ScreenClock(self.counter.load())
         floor = self.clock.state.logical_ts
         self.needs_reference = self.wall() + CLOCK_ALERT_SECONDS < floor
@@ -66,7 +146,10 @@ class DemoSession:
         self.rest_notice: RestNotice | None = None
         self.saved = self.anchor
         self.pending_seconds = 0.0
-        self.erased = False
+        with self.lock:
+            self.check_identity()
+            if not self.erased:
+                self.store.on_local_wipe(self.forgotten)
 
     def now(self):
         return self.base + max(0, self.mono() - self.anchor)
@@ -81,17 +164,22 @@ class DemoSession:
         return bool(policy and not self.erased and self.visible() and not self.needs_reference
                     and self.now() < policy["expires_at"])
 
-    def event(self, kind: str, subject="", duration=0):
+    def event(self, kind: str, subject="", duration=0, *, at=None, version=None):
         if not self.ready():
             return
-        self.store.enqueue(dict(ts=int(self.now()), child_id=self.identity["child_id"],
-                           device_id=self.identity["device_id"], policy_id=self.policy["version"],
+        self.store.enqueue(dict(ts=int(self.now()) if at is None else at, child_id=self.identity["child_id"],
+                           device_id=self.identity["device_id"], policy_id=self.policy["version"] if version is None else version,
                            type=kind, subject=subject, duration_sec=duration), now=int(self.now()))
 
     def tick(self):
         with self.lock:
+            self.check_identity()
+            if self.erased:
+                return
             self.available = False
             if not self.ready():
+                if self.foreground:
+                    self.foreground.suspend()
                 self.clock.previous_mono = None
                 self.clock.previous_active = False
                 self.previous_action = None
@@ -100,6 +188,8 @@ class DemoSession:
                 return
             idle, locked = self.input_sample() if self.input_sample else (0, False)
             if locked:
+                if self.foreground:
+                    self.foreground.suspend()
                 self.clock.previous_mono = None
                 self.clock.previous_active = False
                 self.rest_notice = None
@@ -109,7 +199,11 @@ class DemoSession:
             old_used, old_day = self.clock.state.used, self.clock.state.day
             result = self.clock.sample(self.policy, monotonic=self.mono(), wall=self.wall(),
                                        server_time=self.now(), idle_seconds=idle, scope=Scope(True, True, True))
-            self.pending_seconds += self.clock.state.used - (old_used if self.clock.state.day == old_day else 0)
+            charged = self.clock.state.used - (old_used if self.clock.state.day == old_day else 0)
+            if self.foreground:
+                self.foreground.sample(charged, active=idle <= IDLE_SECONDS and result.action != "lock")
+            else:
+                self.pending_seconds += charged
             minutes, seconds = divmod(result.remaining_seconds, 60)
             self.remaining_seconds = result.remaining_seconds
             self.status = f"Em còn {minutes} phút {seconds:02d} giây trong phiên mô phỏng."
@@ -128,9 +222,7 @@ class DemoSession:
             for threshold in result.warnings:
                 self.notice(f"Em còn {threshold // 60} phút. Em nhớ lưu bài nhé.")
                 self.event("quota_warning")
-            # Reports explicitly name the simulated application. Real Windows usage
-            # is never observed in this development coordinator.
-            if self.pending_seconds >= 30 or result.action == "lock":
+            if not self.foreground and (self.pending_seconds >= 30 or result.action == "lock"):
                 self.flush_segment()
             self.previous_action = result.action
             if self.mono() - self.saved >= 5 or result.warnings or result.clock_alert:
@@ -148,6 +240,10 @@ class DemoSession:
         return None
 
     def flush_segment(self):
+        if self.foreground:
+            self.foreground.flush()
+            self.foreground.clear()
+            return
         seconds = int(self.pending_seconds)
         if seconds > 0:
             self.event("app_stop", "openguard-demo.exe", seconds)
@@ -169,30 +265,51 @@ class DemoSession:
             self.tick()
             if not self.available:
                 raise ValueError("Phiên Windows không khả dụng.")
-            self.counter.apply_command(command, self.clock, self.now())
+            def still_visible():
+                return self.ready() and (self.input_sample is None or not self.input_sample()[1])
+
+            self.counter.apply_command(command, self.clock, self.now, permitted=still_visible)
             # Replace the displayed reason/remaining time in the same command callback.
             self.tick()
 
     def sync(self):
+        with self.sync_lock:
+            with self.lock:
+                self.tick()
+                if self.erased:
+                    return
+                active = self.ready() and self.available
+                used = min(86400, int(self.clock.state.used))
+                remaining = self.remaining_seconds if active else None
+            try:
+                result = self.client.sync_once("visible" if active else "paused", used, self.command,
+                                               remaining_seconds=remaining, on_policy_ready=self.accept_heartbeat)
+            finally:
+                # A revoked refresh or lost receipt may have committed a wipe before raising.
+                self.check_identity()
+            with self.lock:
+                if result.get("erased"):
+                    self.forgotten()
+                elif not self.erased:
+                    self.tick()
+
+    def accept_heartbeat(self, server_time):
         with self.lock:
-            # Serialize counter writes, the credential refresh and a possible local
-            # wipe. No checkpoint can race the deletion acknowledgement.
-            self.tick()
-            active = self.ready() and self.available
-            result = self.client.sync_once("visible" if active else "paused",
-                                           min(86400, int(self.clock.state.used)), self.command,
-                                           remaining_seconds=self.remaining_seconds if active else None)
-            if result.get("erased"):
-                self.forgotten()
-                return
-            self.base, self.anchor = max(result["server_time"], self.clock.state.logical_ts), self.mono()
-            self.needs_reference = False
-            self.load_policy()
-            self.tick()
+            self.check_identity()
+            if not self.erased:
+                self.base, self.anchor = max(server_time, self.clock.state.logical_ts), self.mono()
+                self.needs_reference = False
+                self.load_policy()
 
     def forgotten(self):
+        if self.erased:
+            return
         self.erased = True
+        if self.foreground:
+            self.foreground.suspend()
+        self.available = False
         self.identity, self.policy = {}, None
+        self.counter = None
         self.domain_rules = None
         self.pending_seconds = 0
         self.remaining_seconds = None
@@ -202,8 +319,7 @@ class DemoSession:
 
     def check_identity(self):
         with self.lock:
-            identity = self.store.identity()
-            if not identity or identity.get("erase_pending"):
+            if self.erased or not same_enrollment(self.store.identity(), self.identity):
                 self.forgotten()
 
     def close(self):

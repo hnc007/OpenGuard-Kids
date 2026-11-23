@@ -1,0 +1,21 @@
+{
+  "scope": "HTTPS parent API, WSS policy notification, verified policy applied in DemoSession, durable +900 seconds and ACK observed by parent API. Synthetic visible session, localhost.",
+  "samples": 30,
+  "python": "3.11.9",
+  "windows": "10.0.26200",
+  "tls_checks": [
+    "HTTPS rejects wrong pin",
+    "WSS rejects wrong pin",
+    "HTTPS rejects untrusted CA"
+  ],
+  "ack_observed_ms": {
+    "p50": 976.56,
+    "p95": 1006.156,
+    "max": 1012.938
+  },
+  "policy_applied_ms": {
+    "p50": 1023.99,
+    "p95": 1087.163,
+    "max": 1102.172
+  }
+}

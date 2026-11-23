@@ -118,6 +118,20 @@ def test_websocket_to_ack_and_retry(home):
         with browser.websocket_connect("wss://testserver"+path+"/ws"): pass
 
 
+def test_policy_notification_after_write_and_on_reconnect(home):
+    _, parent, _, csrf, _, family, device = home
+    headers = {"Authorization": "Bearer " + device["access_token"]}
+    ws_url = f"wss://testserver/api/devices/{device['device_id']}/commands/ws?policy_version=1"
+    with parent.websocket_connect(ws_url, headers=headers) as channel:
+        parent.put(family + "/policy", headers=csrf, json={"version": 1, "weekday_minutes": 7}).raise_for_status()
+        assert channel.receive_json() == {"commands": [], "policy_version": 2}
+    issued = parent.post(f"{family}/devices/{device['device_id']}/commands", headers=csrf,
+                         json={"action": "add_15"}).raise_for_status().json()
+    with parent.websocket_connect(ws_url, headers=headers) as channel:
+        frame = channel.receive_json()
+        assert frame["policy_version"] == 2 and frame["commands"][0]["id"] == issued["id"]
+
+
 def test_erasure_closes_sessions_and_tracks_offline_ack(home):
     _,browser,child,pc,cc,prefix,identity=home
     d=identity["device_id"]; proof={"erasure_token":identity["erasure_token"]}

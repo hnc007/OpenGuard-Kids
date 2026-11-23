@@ -31,6 +31,14 @@ Mở **http://127.0.0.1:8000/**. `demo.parent` và `demo.child` dùng hai mật 
 
 ## Chế độ chạy
 
+### Kiểm tra lại “Thêm 15 phút” trên máy đã ghép
+
+1. Đóng khay cũ, khởi động lại server từ mã mới bằng `.\scripts\run-server.ps1` và đăng nhập dashboard. Chọn đúng hồ sơ và thiết bị đã ghép. Giữ cùng địa chỉ server, kho agent và tài khoản Windows lúc ghép.
+2. Trong **Thiết bị**, gửi một lần **Thêm 15 phút**. Khi màn hình hiện **Đang chờ máy**, chạy `.\scripts\run-agent.ps1 -Mode sync` trong 120 giây. Với một lệnh đang đợi, terminal báo **Đã xác nhận 1 lệnh mô phỏng**, và lịch sử chuyển sang **Máy đã xác nhận**. Chạy `sync` lần hai khi chưa gửi thêm lệnh sẽ báo 0.
+3. Mở `.\scripts\run-agent.ps1 -Mode tray`, bật **Bắt đầu phiên trên hồ sơ thử nghiệm** và giữ cửa sổ hiện. Gửi một lệnh **Thêm 15 phút** mới. Kiểm ACK trong lịch sử và thời gian còn lại ở khay. Đừng chạy thêm CLI sync trong khi tray đang giữ kho này.
+4. Nếu hết hạn chờ ACK, đối chiếu thời điểm gửi, UUID thiết bị và kho đang dùng. Xem số giây tại lần báo gần nhất trước khi quyết định cộng thêm lần nữa. Nhịp gửi lại cùng UUID chỉ tác động bộ đếm một lần; bấm gửi lần nữa tạo lệnh mới.
+
+
 Để có 10 ngày lịch sử giả cho buổi demo, sau khi ghép thiết bị mang nhãn “Máy mô phỏng” với hồ sơ seed, chạy `.\scripts\seed-demo.ps1 -HistoryForDevice <UUID>` với ID thật của thiết bị thử. Lệnh chỉ thêm sự kiện vào gia đình demo và chống ghi trùng khi chạy lại. ID xuất hiện trong kết quả enrollment hoặc nhật ký ghép máy.
 
 |Chế độ|Lệnh hoặc tài liệu|Phạm vi|
@@ -84,4 +92,8 @@ Hướng dẫn tra cứu [giao thức ghép máy, xoay pin và đo phục hồi]
 
 - [Đề gốc](QuanLyMayTinhTreEm.docx), [kiến trúc và kế hoạch 6 tuần](docs/ARCHITECTURE.md), [API và mô hình dữ liệu](docs/API.md)
 - [Ma trận nghiệm thu](docs/REQUIREMENTS_TRACEABILITY.md), [quyền riêng tư](docs/PRIVACY.md), [mô hình đe dọa](docs/THREATMODEL.md), [khai báo AI](docs/AI_USAGE.md)
+- [Kế hoạch CORE, SPEC-EXTENDED và E1–E12](docs/IMPLEMENTATION_PLAN.md), [quyết định kiến trúc](docs/DECISIONS.md), [đề xuất sau E12](docs/FEATURE_PROPOSALS.md)
 - [Báo cáo chính](docs/BaoCao.docx), [phụ lục mạng M1–M6](docs/BaoCaoKyThuatMang.pdf), [video demo 5 phút 25 giây](demo/video.mp4), [kịch bản và mốc thời gian](demo/KICH_BAN.md)
+- [Phụ lục M1–M6 cập nhật ngày 23/11/2026](docs/BaoCaoKyThuatMang-2026-11-23.pdf) và [số đo gốc, môi trường, lệnh tái hiện](docs/NETWORK_EVIDENCE.md).
+
+Danh mục phân loại sử dụng dữ liệu *General information of schools* của Ministry of Education, Singapore, theo Singapore Open Data Licence v1.0. Bản trích chứa hostname công khai của 177 trường tiểu học. [Nguồn dữ liệu](https://data.gov.sg/datasets/d_688b934f82c1059ed0a6993d2a829089/view) · [Giấy phép](https://data.gov.sg/open-data-licence) · [Cách chọn và kiểm bản trích](agent/data/README.md)

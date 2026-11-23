@@ -22,9 +22,14 @@ import dns.rdataclass
 import dns.rdatatype
 import dns.rrset
 
-from agent.policy import Decision, DomainRules, SAFESEARCH_TARGET, Scope
+from agent.policy import Decision, DomainRules, SAFESEARCH_TARGET, Scope, ancestors, safety_domains
 
 Message = dns.message.Message
+ADDRESS_TYPES = {dns.rdatatype.A, dns.rdatatype.AAAA, dns.rdatatype.CNAME}
+
+
+def help_name(name):
+    return bool(safety_domains().intersection(ancestors(name.to_text(omit_final_dot=True).lower())))
 
 
 def network_upstream(address: str, port: int = 53) -> Callable[[Message], Message]:
@@ -54,10 +59,25 @@ class Resolver:
         self.on_allowed = on_allowed
         self.cache = OrderedDict()
         self.lock = threading.Lock()
+        self.cache_generation = 0
+        self.next_cleanup = 0.0
+
+    def prune_cache(self):
+        now = self.clock()
+        if now >= self.next_cleanup:
+            with self.lock:
+                self.next_cleanup = now + 1
+                expired = [key for key, (saved, ttl, _) in self.cache.items() if now >= saved + ttl]
+                for key in expired:
+                    del self.cache[key]
+
+    def clear_cache(self):
+        with self.lock:
+            self.cache_generation += 1
+            self.cache.clear()
 
     def _forward_without_policy(self, query: Message) -> Message:
-        with self.lock:
-            self.cache.clear()
+        self.clear_cache()
         return self.upstream(query)
 
     def _resolve(self, query: Message) -> Message:
@@ -65,9 +85,11 @@ class Resolver:
         # EDNS options on behalf of a different request.
         q = query.question[0]
         key = (q.name, q.rdtype, query.flags)
-        cacheable = query.edns < 0 and q.rdclass == dns.rdataclass.IN
+        cacheable = (query.edns < 0 and q.rdclass == dns.rdataclass.IN and q.rdtype in ADDRESS_TYPES
+                     and not help_name(q.name))
         now = self.clock()
         with self.lock:
+            generation = self.cache_generation
             entry = self.cache.get(key) if cacheable else None
             if entry:
                 saved, lifetime, result = entry
@@ -82,11 +104,16 @@ class Resolver:
                     return response
                 del self.cache[key]
         response = self.upstream(query)
-        if cacheable and response.rcode() == dns.rcode.NOERROR and response.answer:
-            ttl = min(rr.ttl for section in (response.answer, response.authority, response.additional)
-                      for rr in section)
+        if (cacheable and response.rcode() == dns.rcode.NOERROR and response.answer and self.scope().active
+                and response.edns < 0 and not response.additional and not response.authority
+                and all(rr.rdtype in ADDRESS_TYPES and not help_name(rr.name)
+                        and (rr.rdtype != dns.rdatatype.CNAME or not any(help_name(r.target) for r in rr))
+                        for rr in response.answer)):
+            ttl = min(rr.ttl for rr in response.answer)
             if ttl:
                 with self.lock:
+                    if generation != self.cache_generation:
+                        return response
                     self.cache[key] = (now, min(ttl, 60), copy.deepcopy(response))
                     self.cache.move_to_end(key)
                     if len(self.cache) > 256:
@@ -189,7 +216,11 @@ def listening(resolver: Resolver, port: int = 0):
             except (socket.timeout, ConnectionError):
                 return
 
-    with socketserver.UDPServer(("127.0.0.1", port), UDP) as udp:
+    class UDPServer(socketserver.UDPServer):
+        def service_actions(self):
+            resolver.prune_cache()
+
+    with UDPServer(("127.0.0.1", port), UDP) as udp:
         with socketserver.TCPServer(udp.server_address, TCP) as tcp:
             threads = []
             for server in (udp, tcp):

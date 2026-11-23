@@ -45,6 +45,19 @@ def test_protected_processes(app):
     assert app_decision(policy, app, "kid", ACTIVE).action == "allow"
 
 
+def test_emergency_contact_apps_survive_explicit_block_and_allow_list():
+    from agent.lab_input import PRIVATE_APPS
+    from agent.policy import HELP_APPS
+
+    assert HELP_APPS <= PRIVATE_APPS
+    digest = "1" * 64
+    policy = demo_policy() | {"allowed_apps": [{"name": "lesson.exe"}],
+                              "blocked_apps": [{"name": "dialer.exe", "sha256": digest}]}
+    for name in HELP_APPS:
+        decision = app_decision(policy, Application(name, digest, "kid"), "kid", ACTIVE)
+        assert decision.action == "allow" and "trợ giúp" in decision.reason
+
+
 def test_synthetic_classification_expectations():
     with (Path(__file__).parent / "fixtures" / "dns_cases.csv").open() as file:
         cases = list(csv.DictReader(file))
@@ -87,6 +100,42 @@ def test_upstream_timeout_is_servfail():
     resolver = Resolver(DomainRules(demo_policy()), lambda: ACTIVE, timeout, lambda *_: None)
     assert resolver.answer(dns.message.make_query("library.example.org", "A")).rcode() == dns.rcode.SERVFAIL
     assert resolver.wire(b"abcdef", False) is None
+
+
+def test_dns_cache_omits_help_and_text_and_drops_old_visibility_generation():
+    def upstream(query):
+        if query.question[0].name.to_text() == "late.example.org.":
+            resolver.clear_cache()  # the UI paused while the upstream request was pending
+        if query.question[0].rdtype == dns.rdatatype.TXT:
+            reply = dns.message.make_response(query)
+            reply.answer.append(dns.rrset.from_text(query.question[0].name, 30, "IN", "TXT", '"fixture"'))
+            return reply
+        return example_upstream(query)
+
+    resolver = Resolver(DomainRules(demo_policy()), lambda: ACTIVE, upstream, lambda *_: None)
+    for name, kind in [("contact.tongdai111.vn", "A"), ("demo.example.org", "TXT"),
+                       ("late.example.org", "A")]:
+        assert resolver.answer(dns.message.make_query(name, kind)).answer
+        assert not resolver.cache
+
+
+def test_dns_cache_excludes_help_aliases_and_expires_unused_queries():
+    now = [10.]
+    def upstream(query):
+        if query.question[0].name.to_text() == "alias.example.org.":
+            reply = dns.message.make_response(query)
+            reply.answer.append(dns.rrset.from_text(query.question[0].name, 30, "IN", "CNAME", "contact.tongdai111.vn."))
+            return reply
+        return example_upstream(query)
+
+    resolver = Resolver(DomainRules(demo_policy()), lambda: ACTIVE, upstream, lambda *_: None, lambda: now[0])
+    assert resolver.answer(dns.message.make_query("alias.example.org", "A")).answer
+    assert not resolver.cache
+    assert resolver.answer(dns.message.make_query("library.example.org", "A")).answer
+    assert resolver.cache
+    now[0] += 61
+    resolver.prune_cache()
+    assert not resolver.cache
 
 
 def test_loopback_dns_udp_tcp_and_scope_pause():

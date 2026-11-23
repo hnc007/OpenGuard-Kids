@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import re
 import threading
 import time
+from pathlib import Path
 
 if os.name == "nt":
     import pywintypes
@@ -22,6 +24,41 @@ PIPE = r"\\.\pipe\OpenGuardKidsLab-v1"
 SERVICE = "OpenGuardKidsLab"
 CHILD_SID = re.compile(r"S-1-5-21-(?:[0-9]+-){3}[0-9]+")
 PIPE_ACCESS = 0x12008B  # generic-read + FILE_WRITE_DATA; excludes FILE_CREATE_PIPE_INSTANCE
+DATA_DIRECTORY = "OpenGuardKidsLab"
+CONFIG_FILE = "service.json"
+ACL_RIGHTS = {"S-1-5-18": 0x1F01FF, "S-1-5-32-544": 0x1F01FF, "S-1-5-19": 0x1200A9}
+
+
+def data_root() -> Path:
+    from win32com.shell import shell, shellcon
+    return Path(shell.SHGetFolderPath(0, shellcon.CSIDL_COMMON_APPDATA, 0, 0)) / DATA_DIRECTORY
+
+
+def check_data_acl(path: Path, *, directory: bool):
+    import stat
+    if path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+        raise ValueError("Từ chối reparse point tại dữ liệu service.")
+    sec = win32security
+    sd = sec.GetFileSecurity(str(path), sec.OWNER_SECURITY_INFORMATION | sec.DACL_SECURITY_INFORMATION)
+    controls, _ = sd.GetSecurityDescriptorControl()
+    acl = sd.GetSecurityDescriptorDacl()
+    owner = sec.ConvertSidToStringSid(sd.GetSecurityDescriptorOwner())
+    if owner not in {"S-1-5-32-544", "S-1-5-18"} or not controls & 0x1000 or acl is None or acl.GetAceCount() != 3:
+        raise ValueError("Owner hoặc DACL của dữ liệu service không khớp.")
+    expected = ACL_RIGHTS.copy()
+    for index in range(3):
+        (kind, flags), mask, who = acl.GetAce(index)
+        if kind != 0 or flags != (3 if directory else 0) or expected.pop(sec.ConvertSidToStringSid(who), None) != mask:
+            raise ValueError("Quyền ghi hoặc quyền kế thừa của dữ liệu service không khớp.")
+
+
+def configured_sid(directory: Path) -> str:
+    check_data_acl(directory, directory=True)
+    check_data_acl(directory / CONFIG_FILE, directory=False)
+    config = json.loads((directory / CONFIG_FILE).read_text(encoding="utf-8"))
+    if config.get("schema") != 1 or not CHILD_SID.fullmatch(config.get("child_sid", "")):
+        raise ValueError("Cấu hình SID của service lab không hợp lệ.")
+    return config["child_sid"]
 
 
 def pipe_attributes(child_sid):
@@ -133,14 +170,14 @@ if os.name == "nt":
         def __init__(self, args):
             super().__init__(args)
             self.stop = threading.Event()
-            self.sid = args[1] if len(args) == 2 else ""
 
         def SvcStop(self):
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
             self.stop.set()
 
         def SvcDoRun(self):
-            serve_pipe(self.stop, self.sid)
+            # SCM recovery does not replay arguments from the original StartService call.
+            serve_pipe(self.stop, configured_sid(data_root()))
 
 
 if __name__ == "__main__":

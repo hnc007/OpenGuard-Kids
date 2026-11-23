@@ -1,0 +1,62 @@
+{
+  "started_utc": "2026-11-23T16:06:30.987239+00:00",
+  "windows": "10.0.26200",
+  "python": "3.11.9",
+  "pairs": 30,
+  "offered_qps": 12,
+  "window_s": 1,
+  "counts": {
+    "input_samples": 92,
+    "foreground_samples": 92,
+    "wss_connections": 2,
+    "heartbeat_success": 2,
+    "domain_events": 359,
+    "app_segments": 3
+  },
+  "idle": {
+    "cpu_pct_one_core": {
+      "p50": 0.0,
+      "p95": 3.124,
+      "max": 4.686
+    },
+    "rss_max_sampled_mib": {
+      "p50": 73.023,
+      "p95": 73.785,
+      "max": 73.824
+    }
+  },
+  "direct": {
+    "cpu_pct_one_core": {
+      "p50": 0.0,
+      "p95": 1.562,
+      "max": 1.562
+    },
+    "rss_max_sampled_mib": {
+      "p50": 73.023,
+      "p95": 73.785,
+      "max": 73.824
+    },
+    "request_rtt_ms": {
+      "p50": 1.438,
+      "p95": 2.647,
+      "max": 19.899
+    }
+  },
+  "proxy": {
+    "cpu_pct_one_core": {
+      "p50": 7.809,
+      "p95": 15.622,
+      "max": 15.623
+    },
+    "rss_max_sampled_mib": {
+      "p50": 73.023,
+      "p95": 73.785,
+      "max": 73.824
+    },
+    "request_rtt_ms": {
+      "p50": 12.647,
+      "p95": 20.578,
+      "max": 41.969
+    }
+  }
+}

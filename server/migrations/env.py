@@ -1,6 +1,6 @@
 from alembic import context
 
-from server import family_models, models, sync_models
+from server import family_models, lab_removal, models, sync_models
 from server.db import Base, default_url, make_engine
 
 url = context.config.attributes.get("database_url") or default_url()

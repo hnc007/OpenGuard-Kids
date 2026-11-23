@@ -3,12 +3,22 @@
 import json
 import logging
 import sqlite3
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
+from weakref import WeakMethod
 
 from shared.protocol import UsageEnvelope, UsagePayload, canonical, verified_policy
+
+
+ENROLLMENT_FIELDS = ("device_id", "child_id", "origin", "verification_key")
+
+
+def same_enrollment(current, expected):
+    return bool(current and not current.get("erase_pending") and
+                all(current.get(field) == expected.get(field) for field in ENROLLMENT_FIELDS))
 
 
 class WindowsProtection:
@@ -32,6 +42,8 @@ class AgentStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.protection = protection if protection is not None else WindowsProtection()
+        self.activity_lock = threading.RLock()
+        self._erasure_listeners = []
         with self.connection() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS enrollment (id INTEGER PRIMARY KEY CHECK(id=1), data BLOB NOT NULL);
@@ -62,6 +74,27 @@ class AgentStore:
     def _read_identity(self, db) -> dict | None:
         row = db.execute("SELECT data FROM enrollment WHERE id=1").fetchone()
         return json.loads(self.protection.decrypt(row[0])) if row else None
+
+    def on_local_wipe(self, callback):
+        """Release live session state under the sampler lock immediately after SQLite commits."""
+        with self.activity_lock:
+            self._erasure_listeners = [ref for ref in self._erasure_listeners if ref() is not None]
+            self._erasure_listeners.append(WeakMethod(callback))
+
+    def counter(self, identity):
+        from agent.screen_time import CounterStore
+
+        binding = {field: identity[field] for field in ENROLLMENT_FIELDS}
+
+        @contextmanager
+        def enrolled_transaction():
+            with self.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                if not same_enrollment(self._read_identity(db), binding):
+                    raise ValueError("Lần ghép máy đã kết thúc. Đã dừng ghi bộ đếm.")
+                yield db
+
+        return CounterStore(self.path, binding["device_id"], write_transaction=enrolled_transaction)
 
     def save_identity(self, identity: dict, *, previous: dict | None = None, new: bool = False):
         sealed = self.protection.encrypt(canonical(identity))
@@ -129,8 +162,7 @@ class AgentStore:
             identity = self._read_identity(db)
             if not identity or identity.get("erase_pending"):
                 return []
-            if enrollment is not None and any(enrollment.get(field) != identity.get(field)
-                                               for field in ("device_id", "child_id", "origin", "verification_key")):
+            if enrollment is not None and not same_enrollment(identity, enrollment):
                 raise ValueError("Lần ghép máy đã đổi. Cần bắt đầu nhịp đồng bộ mới.")
             db.execute("DELETE FROM outbox WHERE ts < ?", (now - 90 * 86400,))
             rows = db.execute("""
@@ -165,17 +197,25 @@ class AgentStore:
         """Remove cached child data and retain only a sealed acknowledgement if requested."""
         receipt = {k: identity[k] for k in ("device_id", "erasure_token", "origin")}
         receipt["erase_pending"] = True
-        with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
-            current = self._read_identity(db)
-            if current is None or current["device_id"] != identity["device_id"]:
-                return
-            db.execute("DELETE FROM enrollment")
-            db.execute("DELETE FROM cached_policy")
-            db.execute("DELETE FROM outbox")
-            tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            for table in ("screen_clock", "applied_time_commands"):
-                if table in tables:
-                    db.execute(f"DELETE FROM {table} WHERE device_id=?", (identity["device_id"],))
-            if retain_ack:
-                db.execute("INSERT INTO enrollment VALUES(1,?)", (self.protection.encrypt(canonical(receipt)),))
+        # Only the committed local wipe shares a lock with the sampler. The server
+        # request and the subsequent receipt acknowledgement can each take seconds.
+        with self.activity_lock:
+            with self.connection() as db:
+                db.execute("BEGIN IMMEDIATE")
+                current = self._read_identity(db)
+                if current is None or current["device_id"] != identity["device_id"]:
+                    return
+                db.execute("DELETE FROM enrollment")
+                db.execute("DELETE FROM cached_policy")
+                db.execute("DELETE FROM outbox")
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                for table in ("screen_clock", "applied_time_commands"):
+                    if table in tables:
+                        db.execute(f"DELETE FROM {table} WHERE device_id=?", (identity["device_id"],))
+                if retain_ack:
+                    db.execute("INSERT INTO enrollment VALUES(1,?)", (self.protection.encrypt(canonical(receipt)),))
+            listeners, self._erasure_listeners = self._erasure_listeners, []
+            for ref in listeners:
+                callback = ref()
+                if callback is not None:
+                    callback()

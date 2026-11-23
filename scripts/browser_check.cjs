@@ -118,6 +118,11 @@ assert session.clock.state.extra_seconds == 1800
     await page.getByText("Đã ghi nhận thay đổi.").waitFor();
     const secondProfile=await page.locator("#child").inputValue();
     assert.notEqual(firstProfile,secondProfile);
+    const account=page.locator("#child-account");
+    await account.locator('[name="username"]').fill("browser.second");
+    await account.locator('[name="password"]').fill(process.env.OGK_CHECK_PASSWORD);
+    const created=page.waitForResponse(r=>r.url().endsWith(`/children/${secondProfile}/account`) && r.status()===201);
+    await account.locator("button").click();await created;
     await page.locator("#child").selectOption(firstProfile);
     await page.getByRole("button",{name:"Thiết bị",exact:true}).click();
     let issued,releaseCode;
@@ -143,19 +148,99 @@ assert session.clock.state.extra_seconds == 1800
     // second tab has already received family data and makes no new request.
     const sibling=await context.newPage();
     sibling.on("pageerror",error=>errors.push(error.message));
+    const familyReads=[];
+    const recordRead=request=>{
+      const url=new URL(request.url());
+      if(url.pathname.startsWith("/api/") && !url.pathname.startsWith("/api/auth/"))
+        familyReads.push(request.method()+" "+url.pathname);
+    };
+    const denied=()=>sibling.getByRole("button",{name:"Đăng xuất để đổi tài khoản"});
+    const bound=(page,profile)=>origin+`/#child-${page}/${profile}`;
+    async function signInChild(username){
+      await sibling.getByLabel("Tên đăng nhập",{exact:true}).fill(username);
+      await sibling.getByLabel("Mật khẩu",{exact:true}).fill(process.env.OGK_CHECK_PASSWORD);
+      await sibling.getByRole("button",{name:"Vào không gian gia đình"}).click();
+    }
+    async function checkDenied(url){
+      await sibling.goto("about:blank");
+      familyReads.length=0;
+      await sibling.goto(url);await denied().waitFor();
+      assert.deepEqual(familyReads,[]);
+      assert.equal(await sibling.locator("#child,#ask-time,#ask-domain,.account-label,#view").count(),0);
+    }
+    sibling.on("request",recordRead);
+    await checkDenied(bound("report",firstProfile));
     await sibling.goto(origin);
     await sibling.getByRole("heading",{name:"7 ngày gần đây"}).waitFor();
     await page.getByRole("button",{name:"Đăng xuất"}).click();
     await sibling.getByRole("heading",{name:"Đăng nhập"}).waitFor();
     assert.equal(await sibling.locator("#child").count(),0);
-    await sibling.goto(origin+"/#requests");
-    await sibling.getByLabel("Tên đăng nhập",{exact:true}).fill("browser.child");
-    await sibling.getByLabel("Mật khẩu",{exact:true}).fill(process.env.OGK_CHECK_PASSWORD);
-    await sibling.getByRole("button",{name:"Vào không gian gia đình"}).click();
+    familyReads.length=0;
+    await sibling.goto(bound("appeal",firstProfile));
+    await signInChild("browser.second");
+    await denied().waitFor();
+    assert.deepEqual(familyReads,[]);
+    for(const fragment of ["#child-report", "#child-time/0", "#child-appeal/01", "#child-report/9007199254740992",
+                            "#child-other/"+secondProfile, "#child-time/"+secondProfile+"/extra"]){
+      await checkDenied(origin+"/"+fragment);
+    }
+    await checkDenied(bound("report",firstProfile));
+    await sibling.reload();await denied().waitFor();
+    assert.deepEqual(familyReads,[]);
+    await sibling.route("**/api/auth/me",async route=>{
+      const response=await route.fetch(), profile=await response.json();
+      delete profile.child_id;
+      await route.fulfill({response,json:profile});
+    },{times:1});
+    await checkDenied(bound("privacy",secondProfile));
+
+    // The same cookie can use only the second child's bound link.
+    await sibling.goto(bound("time",secondProfile));
     await sibling.getByRole("button",{name:"Xin thêm 15 phút"}).waitFor();
+    const ownPost=sibling.waitForResponse(r=>r.url().endsWith(`/children/${secondProfile}/requests`) && r.status()===201);
+    await sibling.getByRole("button",{name:"Xin thêm 15 phút"}).click();await ownPost;
+    await sibling.getByText("Đang chờ",{exact:true}).waitFor();
+    assert(familyReads.every(path=>path.includes(`/api/children/${secondProfile}/`)));
+    familyReads.length=0;
+    await sibling.goto(bound("appeal",firstProfile));await denied().waitFor();
+    assert.deepEqual(familyReads,[]);
+    await sibling.goBack();
+    await sibling.getByRole("button",{name:"Xin thêm 15 phút"}).waitFor();
+    await sibling.goForward();await denied().waitFor();
+
+    await denied().click();
+    await signInChild("browser.child");
+    await sibling.getByRole("button",{name:"Xin thêm 15 phút"}).waitFor();
+    assert.equal(await sibling.locator("#ask-domain input").evaluate(el=>el===document.activeElement),true);
     await sibling.getByRole("button",{name:"Quy tắc",exact:true}).click();
     await sibling.getByLabel("Ngày thường (phút)").waitFor();
+    assert.equal(new URL(sibling.url()).hash,`#child-policy/${firstProfile}`);
+    await sibling.reload();await sibling.getByLabel("Ngày thường (phút)").waitFor();
     await sibling.evaluate(()=>{location.hash="requests";});
+    await sibling.getByRole("button",{name:"Xin thêm 15 phút"}).waitFor();
+
+    // Simulate a cookie replaced outside this page while a bound report is in history.
+    await sibling.goto(bound("report",firstProfile));
+    await sibling.getByRole("heading",{name:"7 ngày gần đây"}).waitFor();
+    const prior=await (await context.request.get(origin+"/api/auth/me")).json();
+    assert.equal(prior.child_id,Number(firstProfile));
+    assert.equal((await context.request.post(origin+"/api/auth/logout",{headers:{"X-CSRF-Token":prior.csrf_token}})).status(),204);
+    const anonymous=await (await context.request.get(origin+"/api/auth/csrf")).json();
+    const replacement=await context.request.post(origin+"/api/auth/login",{headers:{"X-CSRF-Token":anonymous.csrf_token},
+      data:{username:"browser.second",password:process.env.OGK_CHECK_PASSWORD}});
+    assert.equal(replacement.status(),200);
+    assert.equal((await replacement.json()).child_id,Number(secondProfile));
+    familyReads.length=0;
+    await sibling.evaluate(()=>{
+      window.dispatchEvent(new PageTransitionEvent("pagehide",{persisted:true}));
+      if(!document.querySelector("#app").hidden) throw new Error("Family view remained visible during pagehide");
+      window.dispatchEvent(new PageTransitionEvent("pageshow",{persisted:true}));
+    });
+    await sibling.getByRole("heading",{name:"Đăng nhập"}).waitFor();
+    assert.deepEqual(familyReads,[]);
+    await sibling.reload();await denied().waitFor();
+    assert.deepEqual(familyReads,[]);
+    await sibling.goto(origin+"/#requests");
     await sibling.getByRole("button",{name:"Xin thêm 15 phút"}).waitFor();
 
     // Invalidate the session directly on the server. Exercise the history
@@ -166,6 +251,9 @@ assert session.clock.state.extra_seconds == 1800
     await sibling.evaluate(()=>window.dispatchEvent(new PageTransitionEvent("pageshow",{persisted:true})));
     await sibling.getByRole("heading",{name:"Đăng nhập"}).waitFor();
     assert.deepEqual(errors,[]);
-    console.log("Passed browser flows: family dashboard; delayed pairing across two profiles; logout across tabs; child requests deep link; server invalidation on history restore callback.");
+    const commandRun=process.platform==="win32"
+      ? "Windows CLI sync and tray coordinator both acknowledged +15 minutes on loopback HTTP/WS (1800 seconds total)."
+      : "Windows CLI and tray command check skipped on this platform.";
+    console.log("Passed Edge flows: family dashboard, delayed pairing across two profiles, cross-tab logout, enrollment-bound links with two child accounts, rejected malformed links and missing account binding, history/refresh after a cookie switch, and generic #requests. "+commandRun);
   } finally {await browser.close();}
 })().catch(error=>{console.error(error);process.exitCode=1;});

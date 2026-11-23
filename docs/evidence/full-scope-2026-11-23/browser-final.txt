@@ -1,0 +1,1 @@
+Passed Edge flows: family dashboard, delayed pairing across two profiles, cross-tab logout, enrollment-bound links with two child accounts, rejected malformed links and missing account binding, history/refresh after a cookie switch, and generic #requests. Windows CLI sync and tray coordinator both acknowledged +15 minutes on loopback HTTP/WS (1800 seconds total).
